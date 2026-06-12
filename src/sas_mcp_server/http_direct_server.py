@@ -36,6 +36,9 @@ load_dotenv()
 VIYA_USERNAME = os.getenv("VIYA_USERNAME", "")
 VIYA_PASSWORD = os.getenv("VIYA_PASSWORD", "")
 MCP_API_KEY = os.getenv("MCP_API_KEY", "")
+# "http" (streamable HTTP, endpoint /mcp) or "sse" (Server-Sent Events,
+# endpoint /sse) — matching the transport selected in the MCP client.
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "http").lower()
 
 # Refresh the cached token this many seconds before it actually expires.
 _TOKEN_EXPIRY_MARGIN = 60.0
@@ -135,7 +138,12 @@ class ApiKeyMiddleware:
 
 def build_app():
     """Build the ASGI app, wrapping with API key auth when configured."""
-    app = mcp.http_app()
+    if MCP_TRANSPORT not in ("http", "sse"):
+        raise ValueError(
+            f"MCP_TRANSPORT must be 'http' or 'sse', got '{MCP_TRANSPORT}'")
+    logger.info(f"Serving MCP over '{MCP_TRANSPORT}' transport "
+                f"(endpoint: /{'mcp' if MCP_TRANSPORT == 'http' else 'sse'})")
+    app = mcp.http_app(transport=MCP_TRANSPORT)
     if MCP_API_KEY:
         logger.info("API key protection enabled (MCP_API_KEY is set)")
         return ApiKeyMiddleware(app, MCP_API_KEY)

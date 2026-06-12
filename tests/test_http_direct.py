@@ -147,6 +147,32 @@ async def test_api_key_middleware_leaves_health_open():
 
 
 # ---------------------------------------------------------------------------
+# Transport selection
+# ---------------------------------------------------------------------------
+
+
+def test_build_app_rejects_invalid_transport():
+    with patch.object(hds, "MCP_TRANSPORT", "websocket"):
+        with pytest.raises(ValueError):
+            hds.build_app()
+
+
+def test_build_app_passes_transport_to_http_app():
+    with patch.object(hds, "MCP_TRANSPORT", "sse"), \
+         patch.object(hds.mcp, "http_app") as mock_http_app, \
+         patch.object(hds, "MCP_API_KEY", ""):
+        hds.build_app()
+    mock_http_app.assert_called_once_with(transport="sse")
+
+
+def test_build_app_wraps_with_api_key_when_set():
+    with patch.object(hds, "MCP_TRANSPORT", "http"), \
+         patch.object(hds, "MCP_API_KEY", "k"):
+        app = hds.build_app()
+    assert isinstance(app, hds.ApiKeyMiddleware)
+
+
+# ---------------------------------------------------------------------------
 # Server registration
 # ---------------------------------------------------------------------------
 

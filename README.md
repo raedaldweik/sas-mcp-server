@@ -67,7 +67,7 @@ Set `VIYA_USERNAME` and `VIYA_PASSWORD` (and optionally `MCP_API_KEY`) in your `
 ```sh
 uv run app-http-direct
 ```
-The server authenticates to Viya itself with the `.env` credentials and serves streamable HTTP at `http://host:8134/mcp`. If `MCP_API_KEY` is set, clients must send it as an `X-API-Key` header or `Authorization: Bearer` token.
+The server authenticates to Viya itself with the `.env` credentials and serves streamable HTTP at `http://host:8134/mcp` (or SSE at `http://host:8134/sse` with `MCP_TRANSPORT=sse`). If `MCP_API_KEY` is set, clients must send it as an `X-API-Key` header or `Authorization: Bearer` token.
 
 **Option D: Docker / Podman** (containerized deployment)
 ```sh
