@@ -29,6 +29,7 @@ EXPECTED_TOOLS = [
     "get_report_content", "create_report", "update_report_content",
     "validate_report_content", "delete_report", "create_report_from_template",
     "export_report_pdf", "get_export_job", "explain_data",
+    "get_use_case",
 ]
 
 

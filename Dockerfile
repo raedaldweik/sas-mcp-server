@@ -16,9 +16,15 @@ RUN python3 -m venv .venv \
     && /app/.venv/bin/pip install --no-cache-dir /install/*.whl \
     && rm -r /install
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER sas
 
 EXPOSE ${HOST_PORT}
-CMD ["app"]
+# Default to direct HTTP mode so the container is ready to be hosted by an MCP
+# client such as SAS Retrieval Agent Manager. Override the mode with MCP_MODE
+# (http-direct|http|stdio) or by passing an explicit command.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

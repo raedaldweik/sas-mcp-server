@@ -19,6 +19,12 @@ from .viya_utils import (
     run_one_snippet,
     logger,
 )
+from .usecase import load_scope
+
+
+class ScopeError(Exception):
+    """Raised when a tool is asked to act on a resource outside the use-case scope."""
+
 
 
 def register_tools(mcp, get_token):
@@ -33,6 +39,42 @@ def register_tools(mcp, get_token):
         token.  HTTP mode pulls it from context state; stdio mode acquires it
         via password grant.
     """
+
+    # Use-case scope (allowlist) read from environment variables. When no
+    # ALLOWED_* variables are set, ``scope.active`` is False and every tool
+    # behaves exactly as it did before — full access to the environment.
+    scope = load_scope()
+    if scope.active:
+        logger.info(
+            "Use-case scope ACTIVE (%s): %d tables, %d reports, %d models, "
+            "%d decisions; enforce=%s",
+            scope.name or "unnamed", len(scope.tables), len(scope.reports),
+            len(scope.models), len(scope.decisions), scope.enforce)
+
+    def _guard(allowed: bool, kind: str, value, allowed_list):
+        """Block an out-of-scope resource access when enforcement is on."""
+        if scope.enforced and not allowed:
+            allowed_str = ", ".join(allowed_list) if allowed_list else "(none)"
+            raise ScopeError(
+                f"'{value}' is outside this assistant's use case and cannot be "
+                f"accessed. This assistant is limited to these {kind}: {allowed_str}. "
+                f"Call get_use_case to see the full scope."
+            )
+
+    # ------------------------------------------------------------------
+    # Use-case scope
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def get_use_case(ctx: Context) -> dict:
+        """Return this assistant's use-case scope: the datasets, reports, models, and decisions it is limited to.
+
+        Call this first to learn which resources you may work with. If the
+        assistant is not scoped to a use case, ``scoped`` is false and you have
+        full access to the environment.
+        """
+        logger.info("--- TOOL USED: get_use_case ---")
+        return scope.manifest()
 
     # ------------------------------------------------------------------
     # Original tool
@@ -107,6 +149,9 @@ def register_tools(mcp, get_token):
             items, _ = await _get_paged_items(
                 f"/casManagement/servers/{server_id}/caslibs/{caslib_name}/tables",
                 client, limit=limit)
+            if scope.active:
+                items = [t for t in items
+                         if scope.allows_table(t.get("name"), caslib_name, server_id)]
             return [{"name": t.get("name"),
                      "rowCount": t.get("rowCount"),
                      "columnCount": t.get("columnCount")} for t in items]
@@ -122,6 +167,8 @@ def register_tools(mcp, get_token):
             table_name: Name of the table.
         """
         logger.info("--- TOOL USED: get_castable_info ---")
+        _guard(scope.allows_table(table_name, caslib_name, server_id),
+               "datasets", f"{caslib_name}.{table_name}", scope.tables)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             return await _get_json(
@@ -141,6 +188,8 @@ def register_tools(mcp, get_token):
             limit: Maximum columns to return (default 200).
         """
         logger.info("--- TOOL USED: get_castable_columns ---")
+        _guard(scope.allows_table(table_name, caslib_name, server_id),
+               "datasets", f"{caslib_name}.{table_name}", scope.tables)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             items, _ = await _get_paged_items(
@@ -165,6 +214,8 @@ def register_tools(mcp, get_token):
             start: Row offset (default 0).
         """
         logger.info("--- TOOL USED: get_castable_data ---")
+        _guard(scope.allows_table(table_name, caslib_name, server_id),
+               "datasets", f"{caslib_name}.{table_name}", scope.tables)
         token = await get_token(ctx)
         from .viya_utils import VIYA_ENDPOINT
         data_source_id = f"cas~fs~{server_id}~fs~{caslib_name}"
@@ -355,6 +406,9 @@ def register_tools(mcp, get_token):
         async with _make_client(token) as client:
             items, _ = await _get_paged_items("/reports/reports", client,
                                               limit=limit, filters=filters)
+            if scope.active:
+                items = [r for r in items
+                         if scope.allows_report(r.get("id"), r.get("name"))]
             return [{"id": r.get("id"), "name": r.get("name"),
                      "description": r.get("description", ""),
                      "createdBy": r.get("createdBy", "")} for r in items]
@@ -367,6 +421,7 @@ def register_tools(mcp, get_token):
             report_id: ID of the report.
         """
         logger.info("--- TOOL USED: get_report ---")
+        _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             return await _get_json(f"/reports/reports/{report_id}", client)
@@ -383,6 +438,7 @@ def register_tools(mcp, get_token):
             section_index: Report section/page index (default 0).
         """
         logger.info("--- TOOL USED: get_report_image ---")
+        _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         import json as _json
         from .viya_utils import VIYA_ENDPOINT
@@ -624,6 +680,9 @@ def register_tools(mcp, get_token):
         async with _make_client(token) as client:
             items, _ = await _get_paged_items("/modelRepository/models", client,
                                               limit=limit)
+            if scope.active:
+                items = [m for m in items
+                         if scope.allows_model(m.get("id"), m.get("name"))]
             return [{"id": m.get("id"), "name": m.get("name", ""),
                      "description": m.get("description", ""),
                      "modelVersionName": m.get("modelVersionName", "")} for m in items]
@@ -640,6 +699,9 @@ def register_tools(mcp, get_token):
         async with _make_client(token) as client:
             items, _ = await _get_paged_items("/microanalyticScore/modules", client,
                                               limit=limit)
+            if scope.active:
+                items = [m for m in items
+                         if scope.allows_decision(m.get("id"), m.get("name"))]
             return [{"id": m.get("id"), "name": m.get("name", ""),
                      "description": m.get("description", "")} for m in items]
 
@@ -654,6 +716,8 @@ def register_tools(mcp, get_token):
             input_data: Dictionary of input variable name-value pairs.
         """
         logger.info("--- TOOL USED: score_data ---")
+        _guard(scope.allows_decision(module_id), "models or decisions",
+               module_id, scope.decisions)
         token = await get_token(ctx)
         body = {"inputs": [{"name": k, "value": v} for k, v in input_data.items()]}
         async with _make_client(token) as client:
@@ -679,6 +743,7 @@ def register_tools(mcp, get_token):
             report_id: ID of the report.
         """
         logger.info("--- TOOL USED: get_report_content ---")
+        _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             return await _get_json(f"/reports/reports/{report_id}/content",
@@ -726,6 +791,7 @@ def register_tools(mcp, get_token):
             content: Report content JSON (the BIRD model).
         """
         logger.info("--- TOOL USED: update_report_content ---")
+        _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         import json as _json
         from .viya_utils import VIYA_ENDPOINT
@@ -778,6 +844,7 @@ def register_tools(mcp, get_token):
             report_id: ID of the report to delete.
         """
         logger.info("--- TOOL USED: delete_report ---")
+        _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             await _delete_resource(f"/reports/reports/{report_id}", client)
@@ -813,6 +880,10 @@ def register_tools(mcp, get_token):
                 identical names are matched automatically.
         """
         logger.info("--- TOOL USED: create_report_from_template ---")
+        _guard(scope.allows_report(template_report_id), "reports",
+               template_report_id, scope.reports)
+        _guard(scope.allows_table(table_name, caslib_name, server_id),
+               "datasets", f"{caslib_name}.{table_name}", scope.tables)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             content = await _get_json(
@@ -888,6 +959,7 @@ def register_tools(mcp, get_token):
                 returning (default 30).
         """
         logger.info("--- TOOL USED: export_report_pdf ---")
+        _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         async with _make_client(token) as client:
             return await _post_json(
@@ -925,6 +997,8 @@ def register_tools(mcp, get_token):
             date_variable: Optional time-series column; enables forecast insights.
         """
         logger.info("--- TOOL USED: explain_data ---")
+        _guard(scope.allows_table(table_name, caslib_name, server_id),
+               "datasets", f"{caslib_name}.{table_name}", scope.tables)
         token = await get_token(ctx)
         body = {
             "cas": {"server": server_id, "library": caslib_name,

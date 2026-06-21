@@ -144,6 +144,9 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **get_export_job**: Poll a Visual Analytics export job
 - **explain_data**: Natural-language insights about a table column (SAS Insights)
 
+#### Use-Case Scoping
+- **get_use_case**: Report the datasets, reports, models, and decisions this assistant is limited to
+
 ### Prompt Templates
 
 - **debug_sas_log**: Analyze SAS log for errors with root-cause explanations
@@ -155,6 +158,28 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **sas_macro_builder**: Build production-quality SAS macros
 - **generate_report**: Generate ODS/PROC REPORT code
 - **build_va_report**: Guide the end-to-end workflow for building a Visual Analytics report from a CAS table
+
+## Use-Case Scoping
+
+By default the server exposes the entire SAS Viya environment. To build a chatbot focused on a single use case, scope it to a curated set of resources using environment variables — no code changes:
+
+| Variable | Purpose |
+|---|---|
+| `USE_CASE_NAME` / `USE_CASE_DESCRIPTION` | Identify the use case (returned by `get_use_case`) |
+| `ALLOWED_TABLES` | CAS tables — `table`, `caslib.table`, or `server.caslib.table` |
+| `ALLOWED_REPORTS` | Report IDs or names |
+| `ALLOWED_MODELS` | Model IDs or names |
+| `ALLOWED_DECISIONS` | Decision / MAS-module IDs or names |
+| `SCOPE_ENFORCE` | `true` (default) blocks out-of-scope access; `false` only hides it from listings |
+
+Entries are comma- or newline-separated and matched case-insensitively against both IDs and names. When a scope is active:
+
+- list tools (`list_reports`, `list_castables`, `list_registered_models`, `list_models_and_decisions`) return **only** the allowed resources;
+- `get_use_case` tells the agent its scope deterministically (so you don't rely on the system prompt);
+- resource-access tools (e.g. `get_report_content`, `score_data`, `explain_data`) **refuse** out-of-scope IDs when `SCOPE_ENFORCE=true`;
+- `execute_sas_code` remains unrestricted.
+
+With none of the `ALLOWED_*` variables set, the server behaves exactly as before (full access). This makes it easy to stand up many per-use-case assistants from one image — for example, in **SAS Retrieval Agent Manager**, register the container once as a **Container MCP Server** code template, then create one tool server per use case and set these variables on its Environment Variables tab.
 
 ## MCP Client Configuration
 
