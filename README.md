@@ -144,6 +144,9 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **get_export_job**: Poll a Visual Analytics export job
 - **explain_data**: Natural-language insights about a table column (SAS Insights)
 
+#### Visualization
+- **render_chart**: Emit an interactive chart spec (bar/line/area/pie/scatter) for the custom UI to render
+
 #### Use-Case Scoping
 - **get_use_case**: Report the datasets, reports, models, and decisions this assistant is limited to
 

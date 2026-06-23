@@ -103,6 +103,62 @@ def register_tools(mcp, get_token):
         return output
 
     # ------------------------------------------------------------------
+    # Visualization (rendered client-side by the custom UI)
+    # ------------------------------------------------------------------
+
+    _CHART_TYPES = ("bar", "line", "area", "pie", "scatter")
+
+    @mcp.tool()
+    async def render_chart(chart_type: str, title: str, data: list,
+                           x_key: str, y_keys: list, ctx: Context,
+                           subtitle: str = "", stacked: bool = False) -> dict:
+        """Render an interactive chart in the chat UI.
+
+        Use whenever the user asks to show / plot / visualize / graph / compare
+        data, or when a chart makes the answer clearer than text. Call this AFTER
+        fetching the rows with the data tools (e.g. get_castable_data) or computing
+        them with execute_sas_code, then pass the rows in as ``data``. Keep ``data``
+        small — aggregate or limit to just the rows you want to chart.
+
+        The chart is drawn by the user interface from this call; the tool itself
+        does no plotting and returns the normalized chart spec.
+
+        Args:
+            chart_type: One of bar, line, area, pie, scatter.
+            title: Chart title.
+            data: List of row objects, e.g. [{"month": "Jan", "sales": 120}, ...].
+            x_key: Field for the x-axis / category (for pie, the slice label).
+            y_keys: Field(s) plotted as series / values (for pie or scatter, one or two).
+            subtitle: Optional subtitle.
+            stacked: For bar/area, stack the series instead of grouping them.
+        """
+        logger.info("--- TOOL USED: render_chart ---")
+        ct = (chart_type or "").strip().lower()
+        if ct not in _CHART_TYPES:
+            raise ValueError(
+                f"chart_type must be one of {', '.join(_CHART_TYPES)}; got '{chart_type}'.")
+        if not isinstance(data, list) or not data:
+            raise ValueError("data must be a non-empty list of row objects.")
+        if not isinstance(data[0], dict):
+            raise ValueError("each item in data must be an object (key/value row).")
+        keys = list(data[0].keys())
+        missing = [k for k in [x_key, *y_keys] if k not in keys]
+        if missing:
+            raise ValueError(
+                f"these keys are not present in the data rows: {', '.join(missing)}. "
+                f"Available keys: {', '.join(keys)}.")
+        return {
+            "kind": "chart",
+            "type": ct,
+            "title": title,
+            "subtitle": subtitle,
+            "data": data,
+            "xKey": x_key,
+            "yKeys": list(y_keys),
+            "stacked": bool(stacked),
+        }
+
+    # ------------------------------------------------------------------
     # Tier 1 — Data Discovery (CAS Management)
     # ------------------------------------------------------------------
 
