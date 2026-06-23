@@ -17,16 +17,20 @@ from sas_mcp_server import http_direct_server as hds
 def reset_token_cache():
     hds._token_cache["token"] = ""
     hds._token_cache["expires_at"] = 0.0
+    hds._token_cache["refresh_token"] = ""
     yield
     hds._token_cache["token"] = ""
     hds._token_cache["expires_at"] = 0.0
+    hds._token_cache["refresh_token"] = ""
 
 
-def _mock_token_response(token="tok-1", expires_in=3600):
+def _mock_token_response(token="tok-1", expires_in=3600, refresh_token=None):
+    body = {"access_token": token, "expires_in": expires_in}
+    if refresh_token is not None:
+        body["refresh_token"] = refresh_token
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
-    resp.json = MagicMock(return_value={"access_token": token,
-                                        "expires_in": expires_in})
+    resp.json = MagicMock(return_value=body)
     return resp
 
 
@@ -45,7 +49,8 @@ def _mock_async_client(post_mock):
 
 async def test_get_viya_token_fetches_via_password_grant():
     post = AsyncMock(return_value=_mock_token_response("tok-abc"))
-    with patch.object(hds, "VIYA_USERNAME", "user"), \
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", ""), \
+         patch.object(hds, "VIYA_USERNAME", "user"), \
          patch.object(hds, "VIYA_PASSWORD", "pass"), \
          patch.object(httpx, "AsyncClient",
                       return_value=_mock_async_client(post)):
@@ -60,7 +65,8 @@ async def test_get_viya_token_fetches_via_password_grant():
 
 async def test_get_viya_token_is_cached():
     post = AsyncMock(return_value=_mock_token_response("tok-cached"))
-    with patch.object(hds, "VIYA_USERNAME", "user"), \
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", ""), \
+         patch.object(hds, "VIYA_USERNAME", "user"), \
          patch.object(hds, "VIYA_PASSWORD", "pass"), \
          patch.object(httpx, "AsyncClient",
                       return_value=_mock_async_client(post)):
@@ -76,7 +82,8 @@ async def test_get_viya_token_refreshes_after_expiry():
         _mock_token_response("tok-1", expires_in=30),  # below the margin
         _mock_token_response("tok-2"),
     ])
-    with patch.object(hds, "VIYA_USERNAME", "user"), \
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", ""), \
+         patch.object(hds, "VIYA_USERNAME", "user"), \
          patch.object(hds, "VIYA_PASSWORD", "pass"), \
          patch.object(httpx, "AsyncClient",
                       return_value=_mock_async_client(post)):
@@ -89,10 +96,61 @@ async def test_get_viya_token_refreshes_after_expiry():
 
 
 async def test_get_viya_token_requires_credentials():
-    with patch.object(hds, "VIYA_USERNAME", ""), \
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", ""), \
+         patch.object(hds, "VIYA_USERNAME", ""), \
          patch.object(hds, "VIYA_PASSWORD", ""):
         with pytest.raises(hds.AuthenticationError):
             await hds.get_viya_token()
+
+
+async def test_get_viya_token_uses_refresh_grant_when_set():
+    post = AsyncMock(return_value=_mock_token_response("tok-r"))
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", "rt-1"), \
+         patch.object(hds, "VIYA_USERNAME", ""), \
+         patch.object(hds, "VIYA_PASSWORD", ""), \
+         patch.object(httpx, "AsyncClient",
+                      return_value=_mock_async_client(post)):
+        token = await hds.get_viya_token()
+
+    assert token == "tok-r"
+    call = post.call_args
+    assert call[1]["data"]["grant_type"] == "refresh_token"
+    assert call[1]["data"]["refresh_token"] == "rt-1"
+    # The client is authenticated with CLIENT_ID and (empty) CLIENT_SECRET.
+    assert call[1]["auth"] == (hds.CLIENT_ID, hds.CLIENT_SECRET)
+
+
+async def test_refresh_grant_preferred_over_password():
+    post = AsyncMock(return_value=_mock_token_response("tok-r"))
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", "rt-1"), \
+         patch.object(hds, "VIYA_USERNAME", "user"), \
+         patch.object(hds, "VIYA_PASSWORD", "pass"), \
+         patch.object(httpx, "AsyncClient",
+                      return_value=_mock_async_client(post)):
+        await hds.get_viya_token()
+
+    assert post.call_args[1]["data"]["grant_type"] == "refresh_token"
+
+
+async def test_refresh_token_rotation_is_honoured():
+    # First refresh returns a rotated refresh token and a short-lived access
+    # token; the second refresh must use the rotated token.
+    post = AsyncMock(side_effect=[
+        _mock_token_response("tok-1", expires_in=30, refresh_token="rt-2"),
+        _mock_token_response("tok-2"),
+    ])
+    with patch.object(hds, "VIYA_REFRESH_TOKEN", "rt-1"), \
+         patch.object(hds, "VIYA_USERNAME", ""), \
+         patch.object(hds, "VIYA_PASSWORD", ""), \
+         patch.object(httpx, "AsyncClient",
+                      return_value=_mock_async_client(post)):
+        first = await hds.get_viya_token()
+        second = await hds.get_viya_token()
+
+    assert (first, second) == ("tok-1", "tok-2")
+    assert post.call_count == 2
+    assert post.call_args_list[0][1]["data"]["refresh_token"] == "rt-1"
+    assert post.call_args_list[1][1]["data"]["refresh_token"] == "rt-2"
 
 
 # ---------------------------------------------------------------------------

@@ -59,11 +59,11 @@ The server will be available at `http://localhost:8134/mcp` by default. Authenti
 
 **Option B: Stdio mode** (MCP client starts the server on demand)
 
-Set `VIYA_USERNAME` and `VIYA_PASSWORD` in your `.env` file, then configure your MCP client to launch the server directly (see below).
+Set `VIYA_USERNAME` and `VIYA_PASSWORD` in your `.env` file, then configure your MCP client to launch the server directly (see below). For **SSO/federated environments (e.g. Okta)** the password grant does not work — set `VIYA_REFRESH_TOKEN` instead (see [Headless authentication for SSO environments](examples/configuration.md#headless-authentication-for-sso-and-federated-environments)).
 
 **Option C: Direct HTTP mode** (long-running server, no browser OAuth — for server-to-server MCP clients such as SAS Retrieval Agent Manager)
 
-Set `VIYA_USERNAME` and `VIYA_PASSWORD` (and optionally `MCP_API_KEY`) in your `.env` file, then:
+Set `VIYA_USERNAME` and `VIYA_PASSWORD` — or, for SSO/federated environments and unattended 24/7 use, `VIYA_REFRESH_TOKEN` (see [Headless authentication for SSO environments](examples/configuration.md#headless-authentication-for-sso-and-federated-environments)) — (and optionally `MCP_API_KEY`) in your `.env` file, then:
 ```sh
 uv run app-http-direct
 ```
@@ -80,10 +80,10 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 | | **HTTP** | **Stdio** | **Direct HTTP** | **Docker** |
 |---|---|---|---|---|
 | **How it runs** | Long-running server you start separately | MCP client spawns it on demand | Long-running server you start separately | Containerized HTTP server |
-| **Authentication** | OAuth2 PKCE flow (browser popup) | Password grant (credentials in `.env`) | Password grant (credentials in `.env`); optional API key on the endpoint | OAuth2 PKCE flow (browser popup) |
+| **Authentication** | OAuth2 PKCE flow (browser popup) | Password grant, or refresh token for SSO (in `.env`) | Password grant, or refresh token for SSO (in `.env`); optional API key on the endpoint | OAuth2 PKCE flow (browser popup) |
 | **Best for** | Multi-user or shared setups; production-like environments | Single-user local development; quick experimentation | Server-to-server MCP clients that cannot do browser OAuth (e.g. SAS Retrieval Agent Manager) | Team deployments; CI/CD; environments without Python installed |
 | **Requires** | Python + uv | Python + uv | Python + uv | Docker or Podman only |
-| **Credentials stored?** | No — user authenticates interactively | Yes — username/password in `.env` | Yes — username/password in `.env` | No — user authenticates interactively |
+| **Credentials stored?** | No — user authenticates interactively | Yes — username/password or refresh token in `.env` | Yes — username/password or refresh token in `.env` | No — user authenticates interactively |
 | **MCP client config** | Point client to `http://localhost:8134/mcp` | Client runs `uv run app-stdio` | Point client to `http://host:8134/mcp` (+ API key if set) | Point client to `http://host:8134/mcp` |
 
 **Quick guidance:**
@@ -91,7 +91,7 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **Need secure, interactive auth?** Use **HTTP** — no stored passwords, each user authenticates via browser.
 - **Deploying for a team or on a server?** Use **Docker** — portable, no Python dependency on the host, easy to integrate with orchestrators.
 - **Using Gemini CLI?** Use **stdio** — Gemini CLI does not support HTTP mode or browser-based OAuth. See [Gemini CLI configuration](examples/configuration.md#gemini-cli).
-- **Connecting from SAS Retrieval Agent Manager (RAM)?** Use **direct HTTP** — in RAM, add a *Remote MCP server* with transport *Streamable HTTP*, URL `http://<host>:8134/mcp`, and authentication *API Key* (matching `MCP_API_KEY`) or *None*.
+- **Connecting from SAS Retrieval Agent Manager (RAM)?** Use **direct HTTP** — in RAM, add a *Remote MCP server* with transport *Streamable HTTP*, URL `http://<host>:8134/mcp`, and authentication *API Key* (matching `MCP_API_KEY`) or *None*. If your Viya uses **SSO/Okta**, authenticate the server to Viya with `VIYA_REFRESH_TOKEN` (set it as a secret on the tool server's Environment Variables tab) rather than a username/password — see [Headless authentication for SSO environments](examples/configuration.md#headless-authentication-for-sso-and-federated-environments).
 
 ### Available Tools
 

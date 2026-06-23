@@ -44,6 +44,11 @@ if not SSL_VERIFY:
 
 VIYA_ENDPOINT = os.getenv("VIYA_ENDPOINT", "").rstrip("/")
 CLIENT_ID = os.getenv("CLIENT_ID", "sas-mcp")
+# Optional OAuth client secret. Leave empty for a public client (PKCE /
+# allowpublic) — the headless servers then authenticate the client with an
+# empty secret, exactly as the password grant already does. Set it only when
+# you registered the client as confidential.
+CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
 HOST_PORT = int(os.getenv("HOST_PORT", "8134"))
 MCP_SIGNING_KEY = os.getenv("MCP_SIGNING_KEY", "default")
 CONTEXT_NAME = os.getenv("COMPUTE_CONTEXT_NAME", "SAS Job Execution compute context")

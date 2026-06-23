@@ -26,7 +26,8 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import FastMCPError
 from starlette.responses import JSONResponse
 
-from .config import VIYA_ENDPOINT, CLIENT_ID, SSL_VERIFY, HOST_PORT
+from .config import VIYA_ENDPOINT, CLIENT_ID, CLIENT_SECRET, SSL_VERIFY, HOST_PORT
+from .auth import select_grant
 from .viya_utils import logger
 from .tools import register_tools
 from .prompts import register_prompts
@@ -35,6 +36,11 @@ load_dotenv()
 
 VIYA_USERNAME = os.getenv("VIYA_USERNAME", "")
 VIYA_PASSWORD = os.getenv("VIYA_PASSWORD", "")
+# Preferred for SSO / federated (e.g. Okta) environments and for unattended
+# 24/7 deployments: a refresh token obtained once via an interactive login
+# (see examples/get_refresh_token.py). When set, it is used in preference to
+# username/password and carries the full identity of the user who issued it.
+VIYA_REFRESH_TOKEN = os.getenv("VIYA_REFRESH_TOKEN", "")
 MCP_API_KEY = os.getenv("MCP_API_KEY", "")
 # "http" (streamable HTTP, endpoint /mcp) or "sse" (Server-Sent Events,
 # endpoint /sse) — matching the transport selected in the MCP client.
@@ -43,7 +49,9 @@ MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "http").lower()
 # Refresh the cached token this many seconds before it actually expires.
 _TOKEN_EXPIRY_MARGIN = 60.0
 
-_token_cache = {"token": "", "expires_at": 0.0}
+# "refresh_token" holds the most recent refresh token in use. It is seeded
+# lazily from VIYA_REFRESH_TOKEN and updated if SAS Logon rotates it.
+_token_cache = {"token": "", "expires_at": 0.0, "refresh_token": ""}
 
 
 class AuthenticationError(FastMCPError):
@@ -56,29 +64,35 @@ class AuthenticationError(FastMCPError):
 
 
 async def get_viya_token() -> str:
-    """Return a Viya access token, using the password grant with caching.
+    """Return a Viya access token, with caching.
 
-    The token is cached and reused until shortly before its expiry, so a
-    busy agent does not hit /SASLogon on every tool call.
+    Uses the refresh_token grant when ``VIYA_REFRESH_TOKEN`` is set (the
+    recommended path for SSO/federated identities and unattended 24/7
+    deployments), otherwise falls back to the password grant. The access
+    token is cached and reused until shortly before its expiry, so a busy
+    agent does not hit /SASLogon on every tool call.
     """
     if _token_cache["token"] and time.monotonic() < _token_cache["expires_at"]:
         return _token_cache["token"]
 
-    if not VIYA_USERNAME or not VIYA_PASSWORD:
+    refresh_token = _token_cache["refresh_token"] or VIYA_REFRESH_TOKEN
+    data = select_grant(
+        refresh_token=refresh_token,
+        username=VIYA_USERNAME,
+        password=VIYA_PASSWORD,
+    )
+    if data is None:
         raise AuthenticationError(
-            "VIYA_USERNAME and VIYA_PASSWORD must be set in .env for "
-            "direct HTTP mode"
+            "No Viya credentials configured for direct HTTP mode. Set "
+            "VIYA_REFRESH_TOKEN (recommended for SSO/federated environments) "
+            "or VIYA_USERNAME and VIYA_PASSWORD."
         )
     async with httpx.AsyncClient(verify=SSL_VERIFY) as client:
         resp = await client.post(
             f"{VIYA_ENDPOINT}/SASLogon/oauth/token",
-            auth=(CLIENT_ID, ""),
+            auth=(CLIENT_ID, CLIENT_SECRET),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "password",
-                "username": VIYA_USERNAME,
-                "password": VIYA_PASSWORD,
-            },
+            data=data,
         )
     resp.raise_for_status()
     body = resp.json()
@@ -87,6 +101,10 @@ async def get_viya_token() -> str:
     _token_cache["expires_at"] = (
         time.monotonic() + max(expires_in - _TOKEN_EXPIRY_MARGIN, 0.0)
     )
+    # Honour refresh-token rotation: if SAS Logon returned a new refresh
+    # token, use it for the next refresh so the chain does not break.
+    if body.get("refresh_token"):
+        _token_cache["refresh_token"] = body["refresh_token"]
     return _token_cache["token"]
 
 

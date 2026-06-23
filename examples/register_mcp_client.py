@@ -11,7 +11,11 @@ load_dotenv()
 
 VIYA_ENDPOINT = os.getenv("VIYA_ENDPOINT", "").rstrip("/")
 CLIENT_ID = os.getenv("CLIENT_ID", "sas-mcp")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
 HOST_PORT = int(os.getenv("HOST_PORT", "8134"))
+# Refresh-token lifetime (seconds). A long value means the one-time browser
+# login (examples/get_refresh_token.py) rarely has to be repeated. 1 year.
+REFRESH_TOKEN_VALIDITY = int(os.getenv("REFRESH_TOKEN_VALIDITY", str(365 * 24 * 3600)))
 _ssl_verify_env = os.getenv("SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 
 if _ssl_verify_env:
@@ -62,7 +66,13 @@ def register_client(base_url: str, token: str, client_id: str, redirect_uri: str
         "autoapprove": True,
         "allowpublic": True,
         "access-token-validity": 36000,
+        "refresh-token-validity": REFRESH_TOKEN_VALIDITY,
     }
+    # If a client secret is provided, register a confidential client. Omit it
+    # for a public/PKCE client (the default for browser and refresh-token use).
+    if CLIENT_SECRET:
+        payload["client_secret"] = CLIENT_SECRET
+        payload["allowpublic"] = False
     resp = httpx.post(
         f"{base_url}/SASLogon/oauth/clients",
         headers={
@@ -75,8 +85,11 @@ def register_client(base_url: str, token: str, client_id: str, redirect_uri: str
     resp.raise_for_status()
     print(f"Client '{client_id}' registered successfully.")
     print(f"  Redirect URI: {redirect_uri}")
-    print(f"  Scopes: openid")
-    print(f"  Grant types: authorization_code, refresh_token")
+    print("  Scopes: openid")
+    print("  Grant types: authorization_code, refresh_token")
+    print(f"  Refresh-token validity: {REFRESH_TOKEN_VALIDITY}s "
+          f"(~{REFRESH_TOKEN_VALIDITY // 86400} days)")
+    print(f"  Client type: {'confidential' if CLIENT_SECRET else 'public (PKCE)'}")
 
 
 def main():
@@ -89,6 +102,11 @@ def main():
     print(f"Redirect URI: http://localhost:{HOST_PORT}/auth/callback")
     print()
 
+    # This one-time admin step authenticates with the password grant, so use an
+    # account SAS Logon can authenticate directly (e.g. the local `sasboot`
+    # admin). SSO/federated accounts (e.g. Okta) cannot use the password grant.
+    print("Use a SAS administrator that supports password login "
+          "(e.g. 'sasboot'). SSO/Okta accounts will not work here.")
     username = input("Viya admin username: ")
     password = getpass.getpass("Viya admin password: ")
 

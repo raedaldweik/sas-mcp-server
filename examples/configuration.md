@@ -65,7 +65,44 @@ uv run python examples/register_mcp_client.py
 
 The script will prompt for your Viya admin credentials, delete any existing client with the same ID, register a new one, and verify the registration.
 
+> **Tip:** the registration step uses the password grant, so authenticate it with an account SAS Logon can verify directly (e.g. the local `sasboot` admin). An SSO/Okta account cannot be used here. If `sasboot` lacks the authority to register clients, use the **Consul token** from your environment's console instead.
+
 Congratulations! Your Viya is now configured and ready to connect with the MCP server.
+
+---
+
+### Headless authentication for SSO and federated environments
+
+> Applies when users sign in through an external identity provider such as **Okta**, Microsoft Entra ID, or PingFederate.
+
+
+The stdio and direct-HTTP servers log into Viya themselves. By default they use the OAuth2 **password grant** (`VIYA_USERNAME` / `VIYA_PASSWORD`). That grant only works for identities SAS Logon authenticates **directly** — the local `sasboot` account or LDAP users.
+
+If your Viya users sign in through an **external identity provider (Okta, Entra ID, PingFederate, …)**, the password grant **cannot** authenticate them: SAS Logon never sees the password — it redirects the browser to the provider. This is why `sasboot` works but a federated admin account (e.g. `you@company.com`) returns `401` from `/SASLogon/oauth/token`.
+
+The supported headless path is the **refresh-token grant**: log in interactively **once** (the browser goes through your provider), capture a long-lived refresh token, and let the server exchange it for access tokens indefinitely — no browser and no stored password afterward, with the **full identity and privileges** of the user who logged in. This is ideal for unattended 24/7 deployments such as SAS Retrieval Agent Manager.
+
+**Step A — register the client** (Step 2 above). The registration already enables the `authorization_code` and `refresh_token` grants. `register_mcp_client.py` also sets a long `refresh-token-validity` (1 year by default; override with `REFRESH_TOKEN_VALIDITY`) so you rarely repeat the login.
+
+**Step B — obtain a refresh token (one time, in a browser on your machine):**
+```sh
+uv run python examples/get_refresh_token.py
+```
+This opens your browser to SAS Logon, you authenticate through your identity provider, and the script prints a `VIYA_REFRESH_TOKEN=...` line.
+
+> If the browser shows the login page but the redirect back to `localhost` never completes, disable the `form-action` CSP directive on SAS Logon Manager (Step 1). You only need it disabled for this one-time step — the refresh-token grant itself performs no browser redirect, so you can re-enable it afterward.
+
+**Step C — run the server headless.** Put the token in the environment where the server runs (mark it **secret**):
+```
+VIYA_ENDPOINT=https://your-viya-server.com
+VIYA_REFRESH_TOKEN=<the token from Step B>
+```
+The server uses `grant_type=refresh_token` automatically and refreshes access tokens on its own. Leave `VIYA_USERNAME` / `VIYA_PASSWORD` empty — when `VIYA_REFRESH_TOKEN` is set it takes precedence.
+
+**Notes**
+- **Validity / renewal:** you only repeat Step B when the refresh token expires (governed by the client's `refresh-token-validity`, capped by any global SAS Logon maximum).
+- **Rotation:** if your SAS Logon rotates refresh tokens, the server tracks the rotated value in memory. To stay restart-safe, keep rotation disabled (the SAS Logon default) so the token you stored always works; otherwise update the stored value after a rotation.
+- **Confidential clients:** if you registered the client with a secret, also set `CLIENT_SECRET`. For the default public/PKCE client, leave it empty.
 
 ---
 
@@ -75,6 +112,8 @@ The .env file used by the MCP Server allows for customizable options that the us
 |---------------------|---------|--------------|---------------------------------------------------------------|
 | `VIYA_ENDPOINT`     | Yes     | —            | Viya instance to use                                          |
 | `CLIENT_ID`         | No      | `sas-mcp`    | OAuth2 Client ID registered in Viya                           |
+| `CLIENT_SECRET`     | No      | —            | OAuth2 client secret — only for a confidential client; leave empty for public/PKCE |
+| `VIYA_REFRESH_TOKEN`| Headless (SSO) | —     | Refresh token for stdio / direct-HTTP mode; required for SSO/federated users, preferred for 24/7 use. Obtain via `examples/get_refresh_token.py` |
 | `HOST_PORT`         | No      |  `8134`      | Host Port the local MCP Server listens on                    |
 | `MCP_SIGNING_KEY`   | No      | `default`    | Secret key used to sign [FastMCP Proxy JWTs](https://gofastmcp.com/servers/auth/oauth-proxy#param-jwt-signing-key)                                                           |
 | `MCP_BASE_URL`         | No   | `http://localhost:{HOST_PORT}`             | External URL of the MCP server (set for k8s/reverse proxy deployments) |
