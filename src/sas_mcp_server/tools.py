@@ -725,6 +725,24 @@ def register_tools(mcp, get_token):
             return resp.json()
 
     @mcp.tool()
+    async def delete_ml_project(project_id: str, ctx: Context) -> dict:
+        """Delete an AutoML pipeline automation project.
+
+        Use this to remove a project (for example, to start over with a
+        different configuration) instead of calling the REST API from SAS
+        code.
+
+        Args:
+            project_id: ID of the project to delete.
+        """
+        logger.info("--- TOOL USED: delete_ml_project ---")
+        token = await get_token(ctx)
+        async with _make_client(token) as client:
+            await _delete_resource(
+                f"/mlPipelineAutomation/projects/{project_id}", client)
+        return {"status": "deleted", "projectId": project_id}
+
+    @mcp.tool()
     async def list_registered_models(ctx: Context, limit: int = 50) -> list:
         """List models in the Model Repository.
 

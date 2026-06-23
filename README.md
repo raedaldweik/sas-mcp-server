@@ -129,6 +129,7 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **list_ml_projects**: List AutoML projects
 - **create_ml_project**: Create a new AutoML project
 - **run_ml_project**: Run pipeline automation
+- **delete_ml_project**: Delete an AutoML project
 - **list_registered_models**: List models in repository
 - **list_models_and_decisions**: List published MAS modules
 - **score_data**: Score data against a published model

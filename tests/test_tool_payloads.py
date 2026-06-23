@@ -25,6 +25,7 @@ EXPECTED_TOOLS = [
     "submit_batch_job", "get_job_status", "list_jobs",
     "cancel_job", "get_job_log",
     "list_ml_projects", "create_ml_project", "run_ml_project",
+    "delete_ml_project",
     "list_registered_models", "list_models_and_decisions", "score_data",
     "get_report_content", "create_report", "update_report_content",
     "validate_report_content", "delete_report", "create_report_from_template",
@@ -568,6 +569,15 @@ async def test_run_ml_project_request(mcp_server_with_mock_client):
     assert headers["If-Match"] == '"test-etag"'
     assert headers["Accept-Language"] == "en"
     assert "content" in mock_client.put.call_args[1]
+
+
+async def test_delete_ml_project_request(mcp_server_with_mock_client):
+    mcp, mock_client = mcp_server_with_mock_client
+    async with Client(mcp) as client:
+        await client.call_tool("delete_ml_project", {"project_id": "proj-123"})
+
+    url = mock_client.delete.call_args[0][0]
+    assert "/mlPipelineAutomation/projects/proj-123" in url
 
 
 async def test_list_registered_models_request(mcp_server_with_mock_client):
