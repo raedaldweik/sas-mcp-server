@@ -486,16 +486,22 @@ async def test_create_ml_project_binary_request(mcp_server_with_mock_client):
     assert body["pipelineBuildMethod"] == "automatic"
 
     settings = body["settings"]
-    assert settings["applyGlobalMetadata"] is True
+    assert settings["applyGlobalMetadata"] is False
     assert settings["autoRun"] is True
     assert settings["numberOfModels"] == 5
 
     attrs = body["analyticsProjectAttributes"]
     assert attrs["targetVariable"] == "BAD"
-    assert attrs["targetLevel"] == "binary"
     assert attrs["partitionEnabled"] is True
-    assert attrs["classSelectionStatistic"] == "ks"
     assert attrs["targetEventLevel"] == "1"
+    # targetLevel / classSelectionStatistic are NOT valid project attributes
+    # and cause the MLPA metadata step to fail — they must not be sent.
+    assert "targetLevel" not in attrs
+    assert "classSelectionStatistic" not in attrs
+
+    # The SAS MLPA media type must be negotiated.
+    accept = mock_client.post.call_args[1]["headers"]["Accept"]
+    assert accept == "application/vnd.sas.analytics.ml.pipeline.automation.project+json"
 
     assert "predictionType" not in body
     assert "predictionType" not in attrs
@@ -514,9 +520,10 @@ async def test_create_ml_project_interval_request(mcp_server_with_mock_client):
 
     body = mock_client.post.call_args[1]["json"]
     attrs = body["analyticsProjectAttributes"]
-    assert attrs["targetLevel"] == "interval"
-    assert attrs["classSelectionStatistic"] == "ase"
-    assert "targetEventLevel" not in attrs
+    assert attrs["targetVariable"] == "MSRP"
+    assert "targetLevel" not in attrs
+    assert "classSelectionStatistic" not in attrs
+    assert "targetEventLevel" not in attrs  # not sent for interval targets
 
 
 async def test_create_ml_project_nominal_request(mcp_server_with_mock_client):
@@ -532,9 +539,10 @@ async def test_create_ml_project_nominal_request(mcp_server_with_mock_client):
 
     body = mock_client.post.call_args[1]["json"]
     attrs = body["analyticsProjectAttributes"]
-    assert attrs["targetLevel"] == "nominal"
-    assert attrs["classSelectionStatistic"] == "ks"
+    assert attrs["targetVariable"] == "Species"
     assert attrs["targetEventLevel"] == "setosa"
+    assert "targetLevel" not in attrs
+    assert "classSelectionStatistic" not in attrs
 
 
 async def test_create_ml_project_auto_run_false(mcp_server_with_mock_client):

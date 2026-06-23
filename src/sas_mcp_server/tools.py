@@ -653,22 +653,30 @@ def register_tools(mcp, get_token):
                                 auto_run: bool = True) -> dict:
         """Create a new AutoML pipeline automation project.
 
+        SAS auto-detects the target's measurement level from the data; for
+        classification targets, ``target_event_level`` selects the modeled
+        event level. The data table must be loaded in CAS.
+
         Args:
             project_name: Name for the project.
             data_table_uri: URI of the training data table (e.g. '/dataTables/dataSources/cas~fs~cas-shared-default~fs~Public/tables/HMEQ').
             target_variable: Name of the target/response variable.
             description: Optional project description.
-            prediction_type: 'binary', 'interval', or 'nominal' (default 'binary').
-            target_event_level: Target event level for binary/nominal classification (default '1').
+            prediction_type: 'binary', 'interval', or 'nominal' (default 'binary'). For 'binary'/'nominal', target_event_level is included.
+            target_event_level: Event level for classification targets (default '1'); ignored for 'interval'.
             auto_run: Whether to automatically run pipelines after creation (default True).
         """
         logger.info("--- TOOL USED: create_ml_project ---")
         token = await get_token(ctx)
+        # SAS media type required by the MLPA service. Keep
+        # analyticsProjectAttributes to the documented, valid fields only —
+        # extra attributes (e.g. targetLevel, classSelectionStatistic) make the
+        # underlying analytics-project metadata step fail ("...failed to update
+        # project metadata. Make sure that the parameters ... are valid").
+        mlpa_type = "application/vnd.sas.analytics.ml.pipeline.automation.project+json"
         analytics_attrs = {
             "targetVariable": target_variable,
-            "targetLevel": prediction_type,
             "partitionEnabled": True,
-            "classSelectionStatistic": "ks" if prediction_type in ("binary", "nominal") else "ase",
         }
         if prediction_type in ("binary", "nominal"):
             analytics_attrs["targetEventLevel"] = target_event_level
@@ -679,14 +687,15 @@ def register_tools(mcp, get_token):
             "dataTableUri": data_table_uri,
             "pipelineBuildMethod": "automatic",
             "settings": {
-                "applyGlobalMetadata": True,
                 "autoRun": auto_run,
+                "applyGlobalMetadata": False,
                 "numberOfModels": 5,
             },
             "analyticsProjectAttributes": analytics_attrs,
         }
         async with _make_client(token) as client:
-            return await _post_json("/mlPipelineAutomation/projects", client, body=body)
+            return await _post_json("/mlPipelineAutomation/projects", client,
+                                    body=body, accept=mlpa_type)
 
     @mcp.tool()
     async def run_ml_project(project_id: str, ctx: Context) -> dict:
