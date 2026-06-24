@@ -856,8 +856,20 @@ def register_tools(mcp, get_token):
         _guard(scope.allows_report(report_id), "reports", report_id, scope.reports)
         token = await get_token(ctx)
         async with _make_client(token) as client:
-            return await _get_json(f"/reports/reports/{report_id}/content",
-                                   client, accept=REPORT_CONTENT_TYPE)
+            try:
+                return await _get_json(f"/reports/reports/{report_id}/content",
+                                       client, accept=REPORT_CONTENT_TYPE)
+            except _httpx.HTTPStatusError as e:
+                # An empty report (created but never saved) has no content yet.
+                if e.response is not None and e.response.status_code == 404:
+                    return {
+                        "empty": True,
+                        "message": (
+                            "This report has no saved content yet. Author "
+                            "content and save it with update_report_content."
+                        ),
+                    }
+                raise
 
     @mcp.tool()
     async def create_report(report_name: str, ctx: Context,
@@ -881,10 +893,24 @@ def register_tools(mcp, get_token):
             if not parent_folder_uri:
                 folder = await _get_json("/folders/folders/@myFolder", client)
                 parent_folder_uri = f"/folders/folders/{folder.get('id')}"
-            return await _post_json(
-                "/reports/reports", client,
-                body={"name": report_name, "description": description},
-                params={"parentFolderUri": parent_folder_uri})
+            try:
+                return await _post_json(
+                    "/reports/reports", client,
+                    body={"name": report_name, "description": description},
+                    params={"parentFolderUri": parent_folder_uri})
+            except _httpx.HTTPStatusError as e:
+                # A report with this name already exists — return it so the
+                # agent can reuse it instead of dead-ending on the conflict.
+                if e.response is not None and e.response.status_code == 409:
+                    items, _ = await _get_paged_items(
+                        "/reports/reports", client, limit=1,
+                        filters=f"eq(name,'{report_name}')")
+                    if items:
+                        r = items[0]
+                        return {"id": r.get("id"), "name": r.get("name", ""),
+                                "description": r.get("description", ""),
+                                "alreadyExisted": True}
+                raise
 
     @mcp.tool()
     async def update_report_content(report_id: str, content: dict,

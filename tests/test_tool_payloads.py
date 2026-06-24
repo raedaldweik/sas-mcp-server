@@ -9,6 +9,7 @@ request that would be sent to Viya — URL path, method, body structure, query
 params, and headers.  These tests use a mock httpx client (no network calls).
 """
 import json
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastmcp import Client
@@ -836,3 +837,41 @@ async def test_execute_sas_code_request(mcp_server_with_mock_client):
             })
 
         mock_run.assert_called_once_with("data test; x=1; run;", "1", "test-token")
+
+
+# ---------------------------------------------------------------------------
+# Report tool error-path resilience (avoid dead-ending the agent)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_report_content_handles_empty_report(mcp_server_with_mock_client):
+    """A report created but never saved 404s on /content; return a marker."""
+    mcp, mock_client = mcp_server_with_mock_client
+    resp404 = MagicMock()
+    resp404.status_code = 404
+    mock_client.get.return_value.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "404", request=MagicMock(), response=resp404))
+    async with Client(mcp) as client:
+        result = (await client.call_tool(
+            "get_report_content", {"report_id": "r1"})).data
+    assert result["empty"] is True
+
+
+async def test_create_report_returns_existing_on_conflict(
+        mcp_server_with_mock_client, mock_json_response):
+    """A duplicate report name 409s; return the existing report instead."""
+    mcp, mock_client = mcp_server_with_mock_client
+    folder_resp = mock_json_response({"id": "f1"})
+    lookup_resp = mock_json_response(
+        {"items": [{"id": "r1", "name": "Dup", "description": "d"}], "count": 1})
+    mock_client.get.side_effect = [folder_resp, lookup_resp]
+    resp409 = MagicMock()
+    resp409.status_code = 409
+    mock_client.post.side_effect = httpx.HTTPStatusError(
+        "409", request=MagicMock(), response=resp409)
+    async with Client(mcp) as client:
+        result = (await client.call_tool(
+            "create_report", {"report_name": "Dup"})).data
+    assert result["alreadyExisted"] is True
+    assert result["id"] == "r1"
