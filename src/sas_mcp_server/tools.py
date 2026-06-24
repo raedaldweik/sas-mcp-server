@@ -19,7 +19,27 @@ from .viya_utils import (
     run_one_snippet,
     logger,
 )
+from .config import MAX_SAS_OUTPUT_CHARS
 from .usecase import load_scope
+
+
+def _truncate_output(text, limit=MAX_SAS_OUTPUT_CHARS):
+    """Cap large SAS log/listing text so it can't overflow the agent's context.
+
+    Keeps the head and tail (errors and the final NOTE summary usually sit at
+    the end) with a marker noting how much was removed. ``limit`` of 0 disables
+    capping.
+    """
+    if not text or limit <= 0 or len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    tail = limit - head
+    omitted = len(text) - head - tail
+    return (
+        f"{text[:head]}\n\n...[truncated {omitted} characters to fit the model "
+        f"context — re-run a narrower query (fewer columns/rows) for full "
+        f"detail]...\n\n{text[-tail:]}"
+    )
 
 
 class ScopeError(Exception):
@@ -100,6 +120,13 @@ def register_tools(mcp, get_token):
         logger.info("--- TOOL USED: execute_sas_code ---")
         token = await get_token(ctx)
         output = await run_one_snippet(sas_code, "1", token)
+        # Cap log/listing so a verbose PROC can't blow up the agent's context
+        # (output is (snippet_id, state, log, listing)).
+        if isinstance(output, (list, tuple)) and len(output) >= 4:
+            sid, state, log_text, listing_text = output[:4]
+            output = (sid, state,
+                      _truncate_output(log_text),
+                      _truncate_output(listing_text))
         return output
 
     # ------------------------------------------------------------------

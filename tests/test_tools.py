@@ -15,6 +15,31 @@ from sas_mcp_server.viya_utils import (
     _delete_resource,
     _make_client,
 )
+from sas_mcp_server.tools import _truncate_output
+
+
+# ---------------------------------------------------------------------------
+# _truncate_output (caps execute_sas_code log/listing for the agent context)
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_output_passes_short_text_through():
+    assert _truncate_output("short", limit=100) == "short"
+    assert _truncate_output("", limit=100) == ""
+
+
+def test_truncate_output_caps_long_text():
+    text = "A" * 5000 + "B" * 5000
+    out = _truncate_output(text, limit=1000)
+    assert len(out) < len(text)
+    assert "truncated" in out
+    assert out.startswith("A")   # head preserved
+    assert out.rstrip().endswith("B")  # tail preserved
+
+
+def test_truncate_output_disabled_with_zero_limit():
+    text = "x" * 10000
+    assert _truncate_output(text, limit=0) == text
 
 
 # ---------------------------------------------------------------------------

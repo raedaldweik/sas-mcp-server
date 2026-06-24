@@ -52,6 +52,9 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
 HOST_PORT = int(os.getenv("HOST_PORT", "8134"))
 MCP_SIGNING_KEY = os.getenv("MCP_SIGNING_KEY", "default")
 CONTEXT_NAME = os.getenv("COMPUTE_CONTEXT_NAME", "SAS Job Execution compute context")
+# Cap the size (characters) of each execute_sas_code log/listing field so a
+# verbose PROC cannot overflow the agent's context window. 0 disables capping.
+MAX_SAS_OUTPUT_CHARS = int(os.getenv("MAX_SAS_OUTPUT_CHARS", "12000"))
 MCP_BASE_URL = os.getenv("MCP_BASE_URL", f"http://localhost:{HOST_PORT}")
 
 if not VIYA_ENDPOINT:
