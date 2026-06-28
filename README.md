@@ -113,11 +113,6 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **upload_file**: Upload a file to Viya Files Service
 - **download_file**: Download file content
 
-#### Reports & Visualization
-- **list_reports**: List Visual Analytics reports
-- **get_report**: Get report metadata and definition
-- **get_report_image**: Render a report section as an image
-
 #### Batch Jobs
 - **submit_batch_job**: Submit a SAS job for async execution
 - **get_job_status**: Check job state
@@ -134,22 +129,18 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **list_models_and_decisions**: List published MAS modules
 - **score_data**: Score data against a published model
 
-#### Report Building (Visual Analytics authoring)
-- **get_report_content**: Get a report's full content (BIRD definition)
-- **create_report**: Create a new (empty) Visual Analytics report
-- **update_report_content**: Save report content (with ETag handling)
-- **validate_report_content**: Validate report content against the schema
-- **delete_report**: Delete a report
-- **create_report_from_template**: Clone an existing report onto a new CAS table, with optional column remapping
-- **export_report_pdf**: Export a report as a PDF file
-- **get_export_job**: Poll a Visual Analytics export job
+#### Data Insights
 - **explain_data**: Natural-language insights about a table column (SAS Insights)
 
 #### Visualization
 - **render_chart**: Emit an interactive chart spec (bar/line/area/pie/scatter) for the custom UI to render
 
 #### Use-Case Scoping
-- **get_use_case**: Report the datasets, reports, models, and decisions this assistant is limited to
+- **get_use_case**: Report the datasets, models, and decisions this assistant is limited to
+
+> **Note:** SAS Visual Analytics reporting tools (listing, authoring, rendering,
+> and PDF export of VA reports) are intentionally **not** part of this server —
+> they are handled by a dedicated reporting MCP server.
 
 ### Prompt Templates
 
@@ -161,7 +152,6 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 - **explain_sas_code**: Block-by-block code explanation
 - **sas_macro_builder**: Build production-quality SAS macros
 - **generate_report**: Generate ODS/PROC REPORT code
-- **build_va_report**: Guide the end-to-end workflow for building a Visual Analytics report from a CAS table
 
 ## Use-Case Scoping
 
@@ -171,16 +161,15 @@ By default the server exposes the entire SAS Viya environment. To build a chatbo
 |---|---|
 | `USE_CASE_NAME` / `USE_CASE_DESCRIPTION` | Identify the use case (returned by `get_use_case`) |
 | `ALLOWED_TABLES` | CAS tables — `table`, `caslib.table`, or `server.caslib.table` |
-| `ALLOWED_REPORTS` | Report IDs or names |
 | `ALLOWED_MODELS` | Model IDs or names |
 | `ALLOWED_DECISIONS` | Decision / MAS-module IDs or names |
 | `SCOPE_ENFORCE` | `true` (default) blocks out-of-scope access; `false` only hides it from listings |
 
 Entries are comma- or newline-separated and matched case-insensitively against both IDs and names. When a scope is active:
 
-- list tools (`list_reports`, `list_castables`, `list_registered_models`, `list_models_and_decisions`) return **only** the allowed resources;
+- list tools (`list_castables`, `list_registered_models`, `list_models_and_decisions`) return **only** the allowed resources;
 - `get_use_case` tells the agent its scope deterministically (so you don't rely on the system prompt);
-- resource-access tools (e.g. `get_report_content`, `score_data`, `explain_data`) **refuse** out-of-scope IDs when `SCOPE_ENFORCE=true`;
+- resource-access tools (e.g. `get_castable_info`, `score_data`, `explain_data`) **refuse** out-of-scope IDs when `SCOPE_ENFORCE=true`;
 - `execute_sas_code` remains unrestricted.
 
 With none of the `ALLOWED_*` variables set, the server behaves exactly as before (full access). This makes it easy to stand up many per-use-case assistants from one image — for example, in **SAS Retrieval Agent Manager**, register the container once as a **Container MCP Server** code template, then create one tool server per use case and set these variables on its Environment Variables tab.
@@ -298,7 +287,7 @@ Integration tests call every tool against a live Viya environment. They require 
 
 | File | Description |
 |---|---|
-| `tests/test_tool_payloads.py` | Payload assertions for all 35 tools — verifies URL paths, JSON body structure, query params, and headers |
+| `tests/test_tool_payloads.py` | Payload assertions for every tool — verifies URL paths, JSON body structure, query params, and headers |
 | `tests/test_integration.py` | End-to-end workflow tests against a real Viya instance |
 | `tests/test_tools.py` | Unit tests for HTTP helper functions (`_get_json`, `_post_json`, etc.) |
 | `tests/test_viya_utils.py` | Unit tests for Viya compute session and job utilities |

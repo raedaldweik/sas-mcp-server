@@ -8,9 +8,7 @@ Each test calls a tool through the MCP protocol and verifies the exact HTTP
 request that would be sent to Viya — URL path, method, body structure, query
 params, and headers.  These tests use a mock httpx client (no network calls).
 """
-import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from fastmcp import Client
 from conftest import _make_mock_response
 
@@ -21,15 +19,12 @@ EXPECTED_TOOLS = [
     "get_castable_info", "get_castable_columns", "get_castable_data",
     "upload_data", "promote_table_to_memory",
     "list_files", "upload_file", "download_file",
-    "list_reports", "get_report", "get_report_image",
     "submit_batch_job", "get_job_status", "list_jobs",
     "cancel_job", "get_job_log",
     "list_ml_projects", "create_ml_project", "run_ml_project",
     "delete_ml_project",
     "list_registered_models", "list_models_and_decisions", "score_data",
-    "get_report_content", "create_report", "update_report_content",
-    "validate_report_content", "delete_report", "create_report_from_template",
-    "export_report_pdf", "get_export_job", "explain_data",
+    "explain_data",
     "get_use_case", "render_chart",
 ]
 
@@ -289,62 +284,6 @@ async def test_download_file_request(mcp_server_with_mock_client):
 
     url = mock_client.get.call_args[0][0]
     assert "/files/files/abc-123/content" in url
-
-
-# -----------------------------------------------------------------------
-# Tier 3 — Reports & Visualization
-# -----------------------------------------------------------------------
-
-
-async def test_list_reports_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("list_reports", {"limit": 10})
-
-    url = mock_client.get.call_args[0][0]
-    assert "/reports/reports" in url
-    params = mock_client.get.call_args[1]["params"]
-    assert params["limit"] == 10
-
-
-async def test_list_reports_with_filter_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("list_reports", {"filter_name": "sales"})
-
-    params = mock_client.get.call_args[1]["params"]
-    assert params["filter"] == "contains(name,'sales')"
-
-
-async def test_get_report_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("get_report", {"report_id": "rpt-456"})
-
-    url = mock_client.get.call_args[0][0]
-    assert "/reports/reports/rpt-456" in url
-
-
-async def test_get_report_image_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("get_report_image", {
-            "report_id": "rpt-456", "section_index": 2
-        })
-
-    url = mock_client.post.call_args[0][0]
-    assert "/reportImages/jobs" in url
-    kwargs = mock_client.post.call_args[1]
-    body = json.loads(kwargs["content"])
-    assert body["reportUri"] == "/reports/reports/rpt-456"
-    assert body["layoutType"] == "thumbnail"
-    assert body["selectionType"] == "perSection"
-    assert body["sectionIndex"] == 2
-    assert body["size"] == "800x600"
-    assert body["renderLimit"] == 1
-    headers = kwargs["headers"]
-    assert headers["Content-Type"] == "application/vnd.sas.report.images.job.request+json"
-    assert headers["Accept"] == "application/vnd.sas.report.images.job+json"
 
 
 # -----------------------------------------------------------------------
@@ -624,184 +563,6 @@ async def test_score_data_request(mcp_server_with_mock_client):
     input_values = {inp["name"]: inp["value"] for inp in body["inputs"]}
     assert input_values["age"] == 35
     assert input_values["income"] == 50000
-
-
-# -----------------------------------------------------------------------
-# Tier 6 — Report Building (Visual Analytics authoring)
-# -----------------------------------------------------------------------
-
-
-REPORT_CONTENT_TYPE = "application/vnd.sas.report.content+json"
-
-
-async def test_get_report_content_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("get_report_content", {"report_id": "rpt-1"})
-
-    url = mock_client.get.call_args[0][0]
-    assert "/reports/reports/rpt-1/content" in url
-    headers = mock_client.get.call_args[1]["headers"]
-    assert headers["Accept"] == REPORT_CONTENT_TYPE
-
-
-async def test_create_report_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("create_report", {
-            "report_name": "My Report",
-            "description": "A test report",
-            "parent_folder_uri": "/folders/folders/folder-1",
-        })
-
-    url = mock_client.post.call_args[0][0]
-    assert url.endswith("/reports/reports")
-    params = mock_client.post.call_args[1]["params"]
-    assert params["parentFolderUri"] == "/folders/folders/folder-1"
-    body = mock_client.post.call_args[1]["json"]
-    assert body == {"name": "My Report", "description": "A test report"}
-
-
-async def test_create_report_default_folder(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    mock_client.get.return_value = _make_mock_response({"id": "my-folder-id"})
-    async with Client(mcp) as client:
-        await client.call_tool("create_report", {"report_name": "My Report"})
-
-    folder_url = mock_client.get.call_args[0][0]
-    assert "/folders/folders/@myFolder" in folder_url
-    params = mock_client.post.call_args[1]["params"]
-    assert params["parentFolderUri"] == "/folders/folders/my-folder-id"
-
-
-async def test_update_report_content_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    get_resp = _make_mock_response({"@element": "SASReport"})
-    get_resp.headers = {"etag": '"content-etag"'}
-    mock_client.get.return_value = get_resp
-    content = {"@element": "SASReport", "label": "New"}
-
-    async with Client(mcp) as client:
-        await client.call_tool("update_report_content", {
-            "report_id": "rpt-1", "content": content,
-        })
-
-    get_url = mock_client.get.call_args[0][0]
-    assert "/reports/reports/rpt-1/content" in get_url
-    put_url = mock_client.put.call_args[0][0]
-    assert "/reports/reports/rpt-1/content" in put_url
-    headers = mock_client.put.call_args[1]["headers"]
-    assert headers["Content-Type"] == REPORT_CONTENT_TYPE
-    assert headers["If-Match"] == '"content-etag"'
-    sent = json.loads(mock_client.put.call_args[1]["content"])
-    assert sent == content
-
-
-async def test_validate_report_content_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    content = {"@element": "SASReport"}
-    async with Client(mcp) as client:
-        await client.call_tool("validate_report_content", {"content": content})
-
-    url = mock_client.post.call_args[0][0]
-    assert "/reports/content/validation" in url
-    headers = mock_client.post.call_args[1]["headers"]
-    assert headers["Content-Type"] == REPORT_CONTENT_TYPE
-    sent = json.loads(mock_client.post.call_args[1]["content"])
-    assert sent == content
-
-
-async def test_delete_report_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("delete_report", {"report_id": "rpt-1"})
-
-    url = mock_client.delete.call_args[0][0]
-    assert "/reports/reports/rpt-1" in url
-
-
-async def test_create_report_from_template_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    mock_client.get.return_value = _make_mock_response({
-        "@element": "SASReport",
-        "dataSources": [
-            {"@element": "DataSource", "name": "ds1",
-             "casResource": {"server": "cas-shared-default",
-                             "library": "Samples", "table": "CARS"}},
-        ],
-    })
-
-    async with Client(mcp) as client:
-        await client.call_tool("create_report_from_template", {
-            "template_report_id": "tmpl-1",
-            "new_report_name": "Sales Report",
-            "server_id": "cas-shared-default",
-            "caslib_name": "Public",
-            "table_name": "SALES",
-            "column_mappings": {"msrp": "revenue"},
-        })
-
-    content_url = mock_client.get.call_args[0][0]
-    assert "/reports/reports/tmpl-1/content" in content_url
-    url = mock_client.post.call_args[0][0]
-    assert "/reportTransforms/dataMappedReports" in url
-    params = mock_client.post.call_args[1]["params"]
-    assert params["useSavedReport"] == "true"
-    assert params["saveResult"] == "true"
-    body = mock_client.post.call_args[1]["json"]
-    assert body["inputReportUri"] == "/reports/reports/tmpl-1"
-    assert body["resultReportName"] == "Sales Report"
-    original, replacement = body["dataSources"]
-    assert original["purpose"] == "original"
-    assert original["table"] == "CARS"
-    assert replacement["purpose"] == "replacement"
-    assert replacement["table"] == "SALES"
-    assert replacement["dataItemReplacements"] == [
-        {"originalColumn": "msrp", "replacementColumn": "revenue"}]
-
-
-async def test_create_report_from_template_ambiguous_source(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    mock_client.get.return_value = _make_mock_response({
-        "dataSources": [
-            {"casResource": {"server": "s", "library": "l", "table": "A"}},
-            {"casResource": {"server": "s", "library": "l", "table": "B"}},
-        ],
-    })
-
-    async with Client(mcp) as client:
-        result = await client.call_tool("create_report_from_template", {
-            "template_report_id": "tmpl-1",
-            "new_report_name": "R",
-            "server_id": "cas1",
-            "caslib_name": "Public",
-            "table_name": "SALES",
-        })
-
-    assert "error" in result.data
-    mock_client.post.assert_not_called()
-
-
-async def test_export_report_pdf_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("export_report_pdf", {"report_id": "rpt-1"})
-
-    url = mock_client.post.call_args[0][0]
-    assert "/visualAnalytics/reports/rpt-1/exportPdf" in url
-    body = mock_client.post.call_args[1]["json"]
-    assert body["version"] == 1
-    assert "options" in body
-    assert body["wait"] == 30
-
-
-async def test_get_export_job_request(mcp_server_with_mock_client):
-    mcp, mock_client = mcp_server_with_mock_client
-    async with Client(mcp) as client:
-        await client.call_tool("get_export_job", {"job_id": "job-1"})
-
-    url = mock_client.get.call_args[0][0]
-    assert "/visualAnalytics/jobs/job-1" in url
 
 
 async def test_explain_data_request(mcp_server_with_mock_client):

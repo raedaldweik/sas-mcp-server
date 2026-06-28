@@ -18,7 +18,6 @@ Environment variables
 ``ALLOWED_TABLES``        Comma/newline-separated CAS tables. Each entry may be
                           ``table``, ``caslib.table``, or
                           ``server.caslib.table``.
-``ALLOWED_REPORTS``       Comma/newline-separated report IDs or names.
 ``ALLOWED_MODELS``        Comma/newline-separated model IDs or names.
 ``ALLOWED_DECISIONS``     Comma/newline-separated decision/MAS-module IDs or names.
 ``SCOPE_ENFORCE``         ``true`` (default) blocks access to out-of-scope
@@ -51,25 +50,22 @@ def _norm(value) -> str:
 class UseCaseScope:
     """An allowlist of the resources a scoped assistant may use."""
 
-    def __init__(self, name="", description="", tables=None, reports=None,
+    def __init__(self, name="", description="", tables=None,
                  models=None, decisions=None, enforce=True):
         self.name = name
         self.description = description
         self.tables = list(tables or [])
-        self.reports = list(reports or [])
         self.models = list(models or [])
         self.decisions = list(decisions or [])
         self.enforce = enforce
         self._tables = {_norm(t) for t in self.tables}
-        self._reports = {_norm(r) for r in self.reports}
         self._models = {_norm(m) for m in self.models}
         self._decisions = {_norm(d) for d in self.decisions}
 
     @property
     def active(self) -> bool:
         """True when at least one allowlist is defined."""
-        return bool(self._tables or self._reports or self._models
-                    or self._decisions)
+        return bool(self._tables or self._models or self._decisions)
 
     @property
     def enforced(self) -> bool:
@@ -81,9 +77,6 @@ class UseCaseScope:
         return any(c is not None and _norm(c) in allowed for c in candidates)
 
     # -- membership checks (an empty allowlist for a kind permits everything) --
-
-    def allows_report(self, *candidates) -> bool:
-        return not self._reports or self._match(self._reports, *candidates)
 
     def allows_model(self, *candidates) -> bool:
         return not self._models or self._match(self._models, *candidates)
@@ -109,7 +102,6 @@ class UseCaseScope:
             "scoped": self.active,
             "enforced": self.enforced,
             "allowedTables": self.tables,
-            "allowedReports": self.reports,
             "allowedModels": self.models,
             "allowedDecisions": self.decisions,
         }
@@ -122,7 +114,6 @@ def load_scope() -> UseCaseScope:
         name=os.getenv("USE_CASE_NAME", ""),
         description=os.getenv("USE_CASE_DESCRIPTION", ""),
         tables=_parse_list(os.getenv("ALLOWED_TABLES", "")),
-        reports=_parse_list(os.getenv("ALLOWED_REPORTS", "")),
         models=_parse_list(os.getenv("ALLOWED_MODELS", "")),
         decisions=_parse_list(os.getenv("ALLOWED_DECISIONS", "")),
         enforce=enforce,

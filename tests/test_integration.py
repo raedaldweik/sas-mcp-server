@@ -223,35 +223,6 @@ async def test_batch_job_workflow(integration_mcp_server):
 
 
 # -----------------------------------------------------------------------
-# Reports Workflow
-# -----------------------------------------------------------------------
-
-
-async def test_report_workflow(integration_mcp_server):
-    """list_reports → get_report → get_report_image"""
-    async with Client(integration_mcp_server) as client:
-        reports = (await client.call_tool("list_reports", {"limit": 5})).data
-        assert isinstance(reports, list)
-
-        if not reports:
-            pytest.skip("No reports found on this Viya instance")
-
-        report_id = reports[0]["id"]
-        report = (await client.call_tool("get_report", {
-            "report_id": report_id
-        })).data
-        assert isinstance(report, dict)
-
-        try:
-            image_job = (await client.call_tool("get_report_image", {
-                "report_id": report_id
-            })).data
-            assert isinstance(image_job, dict)
-        except Exception:
-            pass
-
-
-# -----------------------------------------------------------------------
 # ML Project Workflow
 # -----------------------------------------------------------------------
 

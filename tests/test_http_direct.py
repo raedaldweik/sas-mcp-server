@@ -255,6 +255,7 @@ async def test_all_tools_registered_on_direct_server():
         tools = await client.list_tools()
         names = {t.name for t in tools}
     assert "execute_sas_code" in names
-    assert "list_reports" in names
-    assert "create_report_from_template" in names
     assert "score_data" in names
+    # Visual Analytics reporting tools were removed from this server.
+    assert "list_reports" not in names
+    assert "create_report_from_template" not in names

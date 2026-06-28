@@ -118,35 +118,6 @@ def register_prompts(mcp):
         ))]
 
     @mcp.prompt()
-    def build_va_report(server: str, caslib: str, table: str,
-                        report_goal: str,
-                        template_report: Optional[str] = None) -> list[Message]:
-        """Guide the full workflow for building a Visual Analytics report from a CAS table."""
-        template_instruction = (
-            f"Use the existing report '{template_report}' as a template: call "
-            f"create_report_from_template to clone it onto the new data, mapping "
-            f"columns as needed."
-            if template_report else
-            "First call list_reports to look for a suitable template report; if one "
-            "exists, prefer create_report_from_template. Otherwise author the content "
-            "directly: study a similar report's structure with get_report_content, "
-            "create the report with create_report, generate BIRD content for it, check "
-            "it with validate_report_content, and save it with update_report_content."
-        )
-        return [Message(role="user", content=(
-            f"Build a SAS Visual Analytics report for the CAS table "
-            f"{server}/{caslib}/{table}.\n\n"
-            f"Goal of the report: {report_goal}\n\n"
-            f"Suggested workflow:\n"
-            f"1. Inspect the data with get_castable_columns (and get_castable_data for a sample).\n"
-            f"2. Optionally call explain_data on key measures to decide what to feature.\n"
-            f"3. {template_instruction}\n"
-            f"4. Verify the result visually with get_report_image and iterate until the "
-            f"report renders correctly.\n"
-            f"5. Share the final report id and, if asked, export it with export_report_pdf."
-        ))]
-
-    @mcp.prompt()
     def generate_report(dataset: str,
                         report_type: Optional[str] = None,
                         output_format: Optional[str] = None) -> list[Message]:
