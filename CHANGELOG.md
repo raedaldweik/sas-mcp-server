@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- **AutoML on nominal (multiclass) targets failed with "failed to update project
+  metadata".** `create_ml_project` sent `targetEventLevel` for both binary and
+  nominal targets, but a multiclass target has no single event level, so MLPA's
+  analytics-project metadata step rejected the parameters. `targetEventLevel` is
+  now sent only for binary targets (nominal/interval let SAS auto-detect the
+  levels). Binary classification was unaffected.
+
 ### Changed
 - **Concurrency hardening for multi-user use** — token refresh in the
   direct-HTTP server is now guarded by an `asyncio.Lock` (with a double-check)

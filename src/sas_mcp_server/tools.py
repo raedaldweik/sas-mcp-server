@@ -870,8 +870,8 @@ def register_tools(mcp, get_token):
             data_table_uri: URI of the training data table (e.g. '/dataTables/dataSources/cas~fs~cas-shared-default~fs~Public/tables/HMEQ').
             target_variable: Name of the target/response variable.
             description: Optional project description.
-            prediction_type: 'binary', 'interval', or 'nominal' (default 'binary'). For 'binary'/'nominal', target_event_level is included.
-            target_event_level: Event level for classification targets (default '1'); ignored for 'interval'.
+            prediction_type: 'binary', 'interval', or 'nominal' (default 'binary'). Use 'nominal' for a multiclass target (3+ categories), 'interval' for a numeric target.
+            target_event_level: Event level for a BINARY target only (default '1'); ignored for 'nominal' (multiclass) and 'interval' (numeric), where SAS auto-detects the levels.
             auto_run: Whether to automatically run pipelines after creation (default True).
         """
         logger.info("--- TOOL USED: create_ml_project ---")
@@ -886,7 +886,12 @@ def register_tools(mcp, get_token):
             "targetVariable": target_variable,
             "partitionEnabled": True,
         }
-        if prediction_type in ("binary", "nominal"):
+        # targetEventLevel only applies to a BINARY target (which of the two
+        # levels is the modeled event). A nominal/multiclass target has no single
+        # event level — sending it there makes MLPA's analytics-project metadata
+        # step reject the parameters ("...failed to update project metadata...").
+        # For nominal and interval we omit it and let SAS auto-detect the level.
+        if prediction_type == "binary":
             analytics_attrs["targetEventLevel"] = target_event_level
         body = {
             "name": project_name,

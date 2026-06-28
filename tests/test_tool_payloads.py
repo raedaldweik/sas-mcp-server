@@ -479,7 +479,10 @@ async def test_create_ml_project_nominal_request(mcp_server_with_mock_client):
     body = mock_client.post.call_args[1]["json"]
     attrs = body["analyticsProjectAttributes"]
     assert attrs["targetVariable"] == "Species"
-    assert attrs["targetEventLevel"] == "setosa"
+    # A nominal/multiclass target has no single event level — sending
+    # targetEventLevel makes MLPA's metadata step reject the params, so it must
+    # be omitted (SAS auto-detects the levels).
+    assert "targetEventLevel" not in attrs
     assert "targetLevel" not in attrs
     assert "classSelectionStatistic" not in attrs
 
