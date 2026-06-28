@@ -109,6 +109,7 @@ docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-se
 #### Data Operations & Files
 - **upload_data**: Upload CSV data into a CAS table
 - **promote_table_to_memory**: Promote a table to global scope in CAS
+- **generate_synthetic_data**: Generate a synthetic CAS table from a column spec (id/int/float/category/bool/date), saved promoted to CAS — for building demo/mock datasets
 - **list_files**: List files in the Viya Files Service
 - **upload_file**: Upload a file to Viya Files Service
 - **download_file**: Download file content

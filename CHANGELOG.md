@@ -6,6 +6,17 @@
 - **SAS Visual Analytics reporting tools** — removed `list_reports`, `get_report`, `get_report_image`, `get_report_content`, `create_report`, `update_report_content`, `validate_report_content`, `delete_report`, `create_report_from_template`, `export_report_pdf`, and `get_export_job`, along with the `build_va_report` prompt and the `ALLOWED_REPORTS` scope variable. VA reporting is being moved to a dedicated reporting MCP server; removing it here keeps this server focused and avoids the VA-authoring calls that failed intermittently. `render_chart` (chart specs for the custom UI) and `explain_data` (SAS Insights) are retained.
 
 ### Added
+- **`generate_synthetic_data` tool** — generates a synthetic CAS table from a
+  column specification (types: id, int, float, category, bool, date; numeric
+  columns support uniform/normal/poisson distributions, ranges, and rounding),
+  building the SAS DATA step server-side and loading the result into CAS as a
+  promoted (global) table. Designed for "co-build" demos where a user generates
+  their own dataset: the agent proposes a schema, the user confirms, then the
+  agent calls this tool. If the target table name exists it auto-picks a
+  numbered variant (no error); oversized requests are clamped to a safe ceiling
+  (`MAX_SYNTHETIC_ROWS`, default 1,000,000) rather than failing. All
+  user-supplied strings are validated/quoted, so a spec cannot inject SAS.
+  (tests in `tests/test_synthetic.py`)
 - **`execute_sas_code` output cap (`MAX_SAS_OUTPUT_CHARS`, default 12000)** — truncates each returned log/listing field (head + tail, with a marker) so a verbose PROC can't overflow an agent's context window. Without it, a single broad EDA could push a RAM conversation past 150k prompt tokens and degrade the model (e.g. ignoring the next request). Set `MAX_SAS_OUTPUT_CHARS=0` to disable.
 - **`delete_ml_project` tool** — deletes an AutoML pipeline automation project via `DELETE /mlPipelineAutomation/projects/{id}`. Fills a gap that previously led agents to improvise REST calls from SAS code (`proc http` with guessed in-cluster hostnames, which fail to resolve).
 - **Refresh-token authentication for headless modes (SSO / federated identity providers)** — the stdio and direct-HTTP servers now support the OAuth2 `refresh_token` grant via a new `VIYA_REFRESH_TOKEN` environment variable, taking precedence over the password grant when set. This is the supported path for environments whose users sign in through an external identity provider (e.g. Okta, Microsoft Entra ID), where the password grant cannot authenticate federated users, and for unattended 24/7 deployments such as SAS Retrieval Agent Manager — the server obtains access tokens with no browser and no stored password, carrying the full identity/privileges of the user who issued the token. Refresh-token rotation is honoured in memory. A one-time bootstrap helper `examples/get_refresh_token.py` performs the interactive authorization-code+PKCE login and prints the refresh token. `examples/register_mcp_client.py` now sets a long `refresh-token-validity` (configurable via `REFRESH_TOKEN_VALIDITY`, default 1 year) and can register a confidential client when `CLIENT_SECRET` is set. New `CLIENT_SECRET` env var (optional, for confidential clients). Grant selection is centralised in `src/sas_mcp_server/auth.py`. (new tests in `tests/test_auth.py` and `tests/test_http_direct.py`; "Headless authentication for SSO and federated environments" section in `examples/configuration.md`)

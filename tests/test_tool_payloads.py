@@ -17,7 +17,7 @@ EXPECTED_TOOLS = [
     "execute_sas_code",
     "list_cas_servers", "list_caslibs", "list_castables",
     "get_castable_info", "get_castable_columns", "get_castable_data",
-    "upload_data", "promote_table_to_memory",
+    "upload_data", "promote_table_to_memory", "generate_synthetic_data",
     "list_files", "upload_file", "download_file",
     "submit_batch_job", "get_job_status", "list_jobs",
     "cancel_job", "get_job_log",

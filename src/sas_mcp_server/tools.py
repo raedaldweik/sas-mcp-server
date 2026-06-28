@@ -6,6 +6,9 @@ Shared tool registration for both HTTP and stdio MCP servers.
 All tools are registered via ``register_tools(mcp, get_token)``.
 """
 
+import os
+import re
+from datetime import datetime
 from typing import Optional
 import httpx as _httpx
 from fastmcp import Context
@@ -21,6 +24,14 @@ from .viya_utils import (
 )
 from .config import MAX_SAS_OUTPUT_CHARS
 from .usecase import load_scope
+
+# Safety ceiling on synthetic-data rows so an over-eager request can't error or
+# exhaust resources. Requests above this are clamped (not rejected). Override
+# with MAX_SYNTHETIC_ROWS.
+MAX_SYNTHETIC_ROWS = int(os.getenv("MAX_SYNTHETIC_ROWS", "1000000"))
+
+_VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,31}$")
+_SYNTH_TYPES = ("id", "int", "float", "category", "bool", "date")
 
 
 def _truncate_output(text, limit=MAX_SAS_OUTPUT_CHARS):
@@ -40,6 +51,161 @@ def _truncate_output(text, limit=MAX_SAS_OUTPUT_CHARS):
         f"context — re-run a narrower query (fewer columns/rows) for full "
         f"detail]...\n\n{text[-tail:]}"
     )
+
+
+def _sas_quote(value) -> str:
+    """Return a single-quoted SAS string literal, escaping embedded quotes."""
+    s = str(value).replace("'", "''")
+    return f"'{s[:200]}'"
+
+
+def _iso_to_sas_date(value) -> str:
+    """Convert 'YYYY-MM-DD' to a SAS date literal like \"01JAN2025\"d."""
+    try:
+        d = datetime.strptime(str(value).strip()[:10], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid date '{value}'; use ISO format YYYY-MM-DD.")
+    return '"' + d.strftime("%d%b%Y").upper() + '"d'
+
+
+def _num(value, default=None):
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Expected a number, got {value!r}.")
+
+
+def _build_synthetic_sas(table, caslib, server, columns, n_rows, seed=12345):
+    """Build a SAS program that synthesises *n_rows* rows from a column spec and
+    loads the result into CAS as a promoted (global) table.
+
+    Each column is a dict with ``name`` and ``type`` (id|int|float|category|
+    bool|date) plus type-specific options. Raises ValueError on an invalid spec
+    so the caller (agent) can correct it. All user-supplied strings are quoted/
+    validated, so the spec cannot inject arbitrary SAS.
+    """
+    if not isinstance(columns, list) or not columns:
+        raise ValueError("Provide a non-empty list of column specs.")
+    for nm in (table, caslib):
+        if not _VALID_NAME.match(str(nm or "")):
+            raise ValueError(
+                f"'{nm}' is not a valid SAS/CAS name (letters, digits, "
+                f"underscore; start with a letter/underscore; <=32 chars).")
+
+    n = int(n_rows)
+    length_decls, format_decls, body = [], [], []
+    uses_p = False
+    seen = set()
+
+    for col in columns:
+        if not isinstance(col, dict):
+            raise ValueError("Each column must be an object with 'name'/'type'.")
+        name = str(col.get("name", "")).strip()
+        if not _VALID_NAME.match(name):
+            raise ValueError(f"Invalid column name '{name}'.")
+        if name.lower() in seen:
+            raise ValueError(f"Duplicate column name '{name}'.")
+        seen.add(name.lower())
+        ctype = str(col.get("type", "float")).lower()
+        if ctype not in _SYNTH_TYPES:
+            raise ValueError(
+                f"Column '{name}': type must be one of {', '.join(_SYNTH_TYPES)}.")
+
+        if ctype == "id":
+            width = max(6, len(str(max(n, 1))))
+            length_decls.append(f"{name} $ {width}")
+            body.append(f"{name} = put(_i, z{width}.);")
+
+        elif ctype in ("int", "float"):
+            dist = str(col.get("dist", "uniform")).lower()
+            mn, mx = _num(col.get("min")), _num(col.get("max"))
+            if dist == "normal":
+                expr = f"rand('normal', {_num(col.get('mean'), 0.0)}, {_num(col.get('std'), 1.0)})"
+            elif dist == "poisson":
+                expr = f"rand('poisson', {_num(col.get('lambda'), 1.0)})"
+            elif dist == "uniform":
+                lo = mn if mn is not None else 0.0
+                hi = mx if mx is not None else (1.0 if ctype == "float" else 100.0)
+                expr = (f"{lo} + floor(rand('uniform') * ({hi} - {lo} + 1))"
+                        if ctype == "int" else
+                        f"{lo} + rand('uniform') * ({hi} - {lo})")
+            else:
+                raise ValueError(
+                    f"Column '{name}': dist must be uniform, normal, or poisson.")
+            body.append(f"{name} = {expr};")
+            if ctype == "int":
+                body.append(f"{name} = round({name});")
+            elif col.get("decimals") is not None:
+                body.append(f"{name} = round({name}, {10 ** (-int(col['decimals'])):.10f});")
+            if mn is not None:
+                body.append(f"if {name} < {mn} then {name} = {mn};")
+            if mx is not None:
+                body.append(f"if {name} > {mx} then {name} = {mx};")
+
+        elif ctype == "category":
+            levels = col.get("levels")
+            if not isinstance(levels, list) or not levels:
+                raise ValueError(
+                    f"Column '{name}': category requires a non-empty 'levels' list.")
+            weights = col.get("weights")
+            w = ([max(0.0, _num(x, 0.0)) for x in weights]
+                 if weights and len(weights) == len(levels) else [1.0] * len(levels))
+            total = sum(w) or 1.0
+            length_decls.append(f"{name} $ {min(64, max(len(str(x)) for x in levels))}")
+            uses_p = True
+            body.append("_p = rand('uniform');")
+            cum = 0.0
+            for i, lvl in enumerate(levels):
+                cum += w[i] / total
+                lit = _sas_quote(lvl)
+                if i == 0:
+                    body.append(f"if _p < {cum:.6f} then {name} = {lit};")
+                elif i < len(levels) - 1:
+                    body.append(f"else if _p < {cum:.6f} then {name} = {lit};")
+                else:
+                    body.append(f"else {name} = {lit};")
+
+        elif ctype == "bool":
+            body.append(f"{name} = (rand('uniform') < {_num(col.get('p_true'), 0.5)});")
+
+        elif ctype == "date":
+            start, end = _iso_to_sas_date(col.get("start")), _iso_to_sas_date(col.get("end"))
+            body.append(
+                f"{name} = {start} + floor(rand('uniform') * ({end} - {start} + 1));")
+            format_decls.append(f"{name} date9.")
+
+    lines = ["data work._mcp_synth;", f"  call streaminit({int(seed)});"]
+    if length_decls:
+        lines.append("  length " + " ".join(length_decls) + ";")
+    if format_decls:
+        lines.append("  format " + " ".join(format_decls) + ";")
+    lines.append(f"  do _i = 1 to {n};")
+    lines += [f"    {s}" for s in body]
+    lines += ["    output;", "  end;", f"  drop _i{' _p' if uses_p else ''};", "run;", ""]
+    lines += ["cas mcpcas;", "caslib _all_ assign;", "proc casutil;",
+              f'  load data=work._mcp_synth outcaslib="{caslib}" casout="{table}" promote;',
+              "quit;", "cas mcpcas terminate;"]
+    return "\n".join(lines)
+
+
+async def _resolve_free_table_name(client, server, caslib, base):
+    """Return *base*, or the first free ``base_N`` if a CAS table of that name
+    already exists in *caslib* (case-insensitive)."""
+    try:
+        items, _ = await _get_paged_items(
+            f"/casManagement/servers/{server}/caslibs/{caslib}/tables",
+            client, limit=1000)
+    except Exception:
+        return base
+    existing = {str(t.get("name", "")).upper() for t in items}
+    if base.upper() not in existing:
+        return base
+    for i in range(1, 1000):
+        if f"{base}_{i}".upper() not in existing:
+            return f"{base}_{i}"
+    return base
 
 
 class ScopeError(Exception):
@@ -468,6 +634,80 @@ def register_tools(mcp, get_token):
             resp = await client.get(f"{VIYA_ENDPOINT}/files/files/{file_id}/content")
             resp.raise_for_status()
             return resp.text
+
+    # ------------------------------------------------------------------
+    # Data Generation
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def generate_synthetic_data(table_name: str, columns: list,
+                                      ctx: Context, n_rows: int = 1000,
+                                      caslib_name: str = "Public",
+                                      server_id: str = "cas-shared-default",
+                                      seed: int = 12345) -> dict:
+        """Generate a synthetic CAS table from a column specification.
+
+        Use this to create realistic mock data on request (e.g. a driver-risk
+        dataset for a demo). Recommended flow: first PROPOSE the column schema to
+        the user in chat and get their agreement, THEN call this tool. The rows
+        are generated in SAS and saved to CAS as a promoted (global) table,
+        immediately usable by the data, charting, AutoML, and scoring tools.
+
+        If a table with the requested name already exists, a numbered variant is
+        created automatically (no error). Very large requests are capped to a
+        safe maximum rather than failing.
+
+        Args:
+            table_name: Name for the new CAS table.
+            columns: List of column specs. Each is an object with ``name`` and
+                ``type`` (one of: id, int, float, category, bool, date) plus
+                type-specific options:
+                  - id: sequential zero-padded identifier
+                  - int / float: ``min``, ``max``; or ``dist`` "normal"
+                    (``mean``, ``std``) or "poisson" (``lambda``); float also
+                    accepts ``decimals``
+                  - category: ``levels`` (list) and optional ``weights`` (list)
+                  - bool: ``p_true`` (probability of 1; default 0.5)
+                  - date: ``start`` and ``end`` as YYYY-MM-DD
+            n_rows: Number of rows to generate (default 1000).
+            caslib_name: Target caslib (default Public).
+            server_id: CAS server (default cas-shared-default).
+            seed: Random seed for reproducibility (default 12345).
+        """
+        logger.info("--- TOOL USED: generate_synthetic_data ---")
+        n = max(1, min(int(n_rows), MAX_SYNTHETIC_ROWS))
+        clamped = int(n_rows) > MAX_SYNTHETIC_ROWS
+        _guard(scope.allows_table(table_name, caslib_name, server_id),
+               "datasets", f"{caslib_name}.{table_name}", scope.tables)
+        token = await get_token(ctx)
+        async with _make_client(token) as client:
+            target = await _resolve_free_table_name(
+                client, server_id, caslib_name, table_name)
+        # _build_synthetic_sas validates the spec and raises ValueError on error.
+        code = _build_synthetic_sas(target, caslib_name, server_id, columns, n, seed)
+        output = await run_one_snippet(code, "1", token)
+        state = output[1] if len(output) > 1 else "unknown"
+        log_text = output[2] if len(output) > 2 else ""
+        if state not in ("completed", "warning"):
+            return {"error": True, "state": state,
+                    "log": _truncate_output(log_text),
+                    "message": (f"Generation of {caslib_name}.{target} failed; "
+                                f"check the log and adjust the spec.")}
+        result = {
+            "table": target, "caslib": caslib_name, "server": server_id,
+            "rowCount": n, "promoted": True,
+            "columns": [{"name": c.get("name"), "type": c.get("type", "float")}
+                        for c in columns if isinstance(c, dict)],
+            "message": (f"Created {caslib_name}.{target} with {n} rows. "
+                        f"Preview it with get_castable_data."),
+        }
+        if target != table_name:
+            result["renamed_from"] = table_name
+            result["note"] = (f"'{table_name}' already existed; created "
+                              f"'{target}' instead.")
+        if clamped:
+            result["rows_capped"] = MAX_SYNTHETIC_ROWS
+        return result
 
     # ------------------------------------------------------------------
     # Tier 4 — Batch Jobs & Async Execution
