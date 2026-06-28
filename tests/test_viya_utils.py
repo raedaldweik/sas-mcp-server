@@ -126,9 +126,22 @@ async def test_wait_job_error_state(mock_httpx_client, mock_job_log, mock_job_li
     ]
     
     state, log, listing = await wait_job(mock_httpx_client, "test-session-id", "test-job-id", poll=0.01)
-    
+
     assert state == "error"
     assert "ERROR: Something went wrong" in log
+
+
+@pytest.mark.asyncio
+async def test_wait_job_times_out(mock_httpx_client, mock_env_vars):
+    """A job that never reaches a terminal state raises TimeoutError once the
+    poll deadline is exceeded (safety net against a stuck compute job)."""
+    running = AsyncMock()
+    running.text = "running"
+    mock_httpx_client.get.return_value = running  # never terminal
+
+    with pytest.raises(TimeoutError):
+        await wait_job(mock_httpx_client, "test-session-id", "test-job-id",
+                       poll=0.01, timeout=0.05)
 
 
 @pytest.mark.asyncio
