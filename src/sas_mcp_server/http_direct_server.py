@@ -16,6 +16,7 @@ The endpoint can optionally be protected with a static API key by setting
 an ``Authorization: Bearer`` token.
 """
 
+import asyncio
 import os
 import time
 
@@ -52,6 +53,9 @@ _TOKEN_EXPIRY_MARGIN = 60.0
 # "refresh_token" holds the most recent refresh token in use. It is seeded
 # lazily from VIYA_REFRESH_TOKEN and updated if SAS Logon rotates it.
 _token_cache = {"token": "", "expires_at": 0.0, "refresh_token": ""}
+# Serializes token refresh so a burst of concurrent requests at expiry doesn't
+# stampede /SASLogon or race to consume a rotating refresh token.
+_token_lock = asyncio.Lock()
 
 
 class AuthenticationError(FastMCPError):
@@ -75,38 +79,43 @@ async def get_viya_token() -> str:
     if _token_cache["token"] and time.monotonic() < _token_cache["expires_at"]:
         return _token_cache["token"]
 
-    refresh_token = _token_cache["refresh_token"] or VIYA_REFRESH_TOKEN
-    grant = select_grant(
-        refresh_token=refresh_token,
-        username=VIYA_USERNAME,
-        password=VIYA_PASSWORD,
-    )
-    if grant is None:
-        raise AuthenticationError(
-            "No Viya credentials configured for direct HTTP mode. Set "
-            "VIYA_REFRESH_TOKEN (recommended for SSO/federated environments) "
-            "or VIYA_USERNAME and VIYA_PASSWORD."
+    async with _token_lock:
+        # Another coroutine may have refreshed while we waited for the lock.
+        if _token_cache["token"] and time.monotonic() < _token_cache["expires_at"]:
+            return _token_cache["token"]
+
+        refresh_token = _token_cache["refresh_token"] or VIYA_REFRESH_TOKEN
+        grant = select_grant(
+            refresh_token=refresh_token,
+            username=VIYA_USERNAME,
+            password=VIYA_PASSWORD,
         )
-    data, auth = client_request(grant, CLIENT_ID, CLIENT_SECRET)
-    async with httpx.AsyncClient(verify=SSL_VERIFY) as client:
-        resp = await client.post(
-            f"{VIYA_ENDPOINT}/SASLogon/oauth/token",
-            auth=auth,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data=data,
+        if grant is None:
+            raise AuthenticationError(
+                "No Viya credentials configured for direct HTTP mode. Set "
+                "VIYA_REFRESH_TOKEN (recommended for SSO/federated environments) "
+                "or VIYA_USERNAME and VIYA_PASSWORD."
+            )
+        data, auth = client_request(grant, CLIENT_ID, CLIENT_SECRET)
+        async with httpx.AsyncClient(verify=SSL_VERIFY) as client:
+            resp = await client.post(
+                f"{VIYA_ENDPOINT}/SASLogon/oauth/token",
+                auth=auth,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data=data,
+            )
+        resp.raise_for_status()
+        body = resp.json()
+        _token_cache["token"] = body["access_token"]
+        expires_in = float(body.get("expires_in", 0))
+        _token_cache["expires_at"] = (
+            time.monotonic() + max(expires_in - _TOKEN_EXPIRY_MARGIN, 0.0)
         )
-    resp.raise_for_status()
-    body = resp.json()
-    _token_cache["token"] = body["access_token"]
-    expires_in = float(body.get("expires_in", 0))
-    _token_cache["expires_at"] = (
-        time.monotonic() + max(expires_in - _TOKEN_EXPIRY_MARGIN, 0.0)
-    )
-    # Honour refresh-token rotation: if SAS Logon returned a new refresh
-    # token, use it for the next refresh so the chain does not break.
-    if body.get("refresh_token"):
-        _token_cache["refresh_token"] = body["refresh_token"]
-    return _token_cache["token"]
+        # Honour refresh-token rotation: if SAS Logon returned a new refresh
+        # token, use it for the next refresh so the chain does not break.
+        if body.get("refresh_token"):
+            _token_cache["refresh_token"] = body["refresh_token"]
+        return _token_cache["token"]
 
 
 async def _direct_get_token(ctx: Context) -> str:

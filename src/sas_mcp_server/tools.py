@@ -8,6 +8,7 @@ All tools are registered via ``register_tools(mcp, get_token)``.
 
 import os
 import re
+import uuid
 from datetime import datetime
 from typing import Optional
 import httpx as _httpx
@@ -688,6 +689,21 @@ def register_tools(mcp, get_token):
         output = await run_one_snippet(code, "1", token)
         state = output[1] if len(output) > 1 else "unknown"
         log_text = output[2] if len(output) > 2 else ""
+        if state not in ("completed", "warning"):
+            # The existence check + promote is not atomic: a concurrent request
+            # could have claimed the same name in between (the promote then
+            # fails). If the name is now taken, retry once with a unique suffix
+            # so two users generating the same table at once never error out.
+            async with _make_client(token) as client:
+                now_taken = await _resolve_free_table_name(
+                    client, server_id, caslib_name, target) != target
+            if now_taken:
+                target = f"{table_name}_{uuid.uuid4().hex[:6]}"
+                code = _build_synthetic_sas(
+                    target, caslib_name, server_id, columns, n, seed)
+                output = await run_one_snippet(code, "1", token)
+                state = output[1] if len(output) > 1 else "unknown"
+                log_text = output[2] if len(output) > 2 else ""
         if state not in ("completed", "warning"):
             return {"error": True, "state": state,
                     "log": _truncate_output(log_text),

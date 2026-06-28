@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- **Concurrency hardening for multi-user use** — token refresh in the
+  direct-HTTP server is now guarded by an `asyncio.Lock` (with a double-check)
+  so a burst of concurrent requests at token expiry can't stampede SAS Logon or
+  race a rotating refresh token. `generate_synthetic_data` retries once with a
+  unique suffix if a concurrent request claimed the same table name in the
+  gap between the existence check and the promote, so two users generating the
+  same table at the same moment never error out.
+
 ### Removed
 - **SAS Visual Analytics reporting tools** — removed `list_reports`, `get_report`, `get_report_image`, `get_report_content`, `create_report`, `update_report_content`, `validate_report_content`, `delete_report`, `create_report_from_template`, `export_report_pdf`, and `get_export_job`, along with the `build_va_report` prompt and the `ALLOWED_REPORTS` scope variable. VA reporting is being moved to a dedicated reporting MCP server; removing it here keeps this server focused and avoids the VA-authoring calls that failed intermittently. `render_chart` (chart specs for the custom UI) and `explain_data` (SAS Insights) are retained.
 
