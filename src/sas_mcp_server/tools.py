@@ -6,6 +6,7 @@ Shared tool registration for both HTTP and stdio MCP servers.
 All tools are registered via ``register_tools(mcp, get_token)``.
 """
 
+import asyncio
 import os
 import re
 import uuid
@@ -901,8 +902,22 @@ def register_tools(mcp, get_token):
             "analyticsProjectAttributes": analytics_attrs,
         }
         async with _make_client(token) as client:
-            return await _post_json("/mlPipelineAutomation/projects", client,
-                                    body=body, accept=mlpa_type)
+            try:
+                return await _post_json("/mlPipelineAutomation/projects", client,
+                                        body=body, accept=mlpa_type)
+            except Exception as e:
+                # MLPA's analytics-project metadata step intermittently fails
+                # when several projects are created at once under the same
+                # identity ("...failed to update project metadata... create the
+                # project again"). That is SAS's own remedy, so retry once after
+                # a brief pause with a unique name suffix (also dodges any
+                # name/folder collision).
+                logger.warning(
+                    "create_ml_project failed (%s); retrying once with a unique name", e)
+                await asyncio.sleep(2)
+                body["name"] = f"{project_name}_{uuid.uuid4().hex[:4]}"
+                return await _post_json("/mlPipelineAutomation/projects", client,
+                                        body=body, accept=mlpa_type)
 
     @mcp.tool()
     async def run_ml_project(project_id: str, ctx: Context) -> dict:
