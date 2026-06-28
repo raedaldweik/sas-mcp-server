@@ -2,11 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import os
 import httpx
 from fastmcp.utilities.logging import get_logger
 from .config import VIYA_ENDPOINT, CONTEXT_NAME, SSL_VERIFY
 
 logger = get_logger(__name__)
+
+# Safety net: the longest we will poll a single compute job before giving up,
+# so a stuck job can never hang the agent indefinitely. Generous by default
+# (15 min) so legitimate long-running SAS code is unaffected; override with the
+# JOB_POLL_TIMEOUT environment variable (seconds).
+JOB_POLL_TIMEOUT = float(os.getenv("JOB_POLL_TIMEOUT", "900"))
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +180,9 @@ async def submit_job(client, session_id, code):
     return job["id"]
 
 
-async def wait_job(client, session_id, job_id, poll=2):
+async def wait_job(client, session_id, job_id, poll=2, timeout=None):
+    timeout = JOB_POLL_TIMEOUT if timeout is None else timeout
+    deadline = asyncio.get_event_loop().time() + timeout
     while True:
         state_url = f"{VIYA_ENDPOINT}/compute/sessions/{session_id}/jobs/{job_id}/state"
         resp = await client.get(state_url)
@@ -198,6 +207,12 @@ async def wait_job(client, session_id, job_id, poll=2):
             )
 
             return state, log_text, listing_text
+        if asyncio.get_event_loop().time() > deadline:
+            raise TimeoutError(
+                f"SAS job {job_id} did not finish within {timeout:.0f}s "
+                f"(last state: '{state}'). Increase JOB_POLL_TIMEOUT if this "
+                f"job legitimately runs longer."
+            )
         await asyncio.sleep(poll)
 
 
@@ -225,5 +240,6 @@ async def run_one_snippet(snippet_data, snippet_id, token):
                 await client.delete(delete_url)
                 logger.info(f"Session {sid} deleted successfully")
             except Exception as e:
+                # Best-effort cleanup: never let a failed session delete mask
+                # the real job result or the original error from the try block.
                 logger.error(f"Failed to delete session {sid}: {str(e)}")
-                raise e

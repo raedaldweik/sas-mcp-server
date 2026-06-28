@@ -62,6 +62,10 @@ def test_config_missing_viya_endpoint(monkeypatch):
             _reload_config()
     # Restore a valid module state for subsequent tests in the session, since
     # the failed reload leaves the module in a partially-initialised state.
+    # Set the endpoint explicitly so the restore succeeds regardless of whether
+    # VIYA_ENDPOINT happens to be present in the ambient environment (e.g. a CI
+    # that exports it) — load_dotenv alone would not repopulate it.
+    monkeypatch.setenv("VIYA_ENDPOINT", "https://test.viya.com")
     _reload_config()
 
 
