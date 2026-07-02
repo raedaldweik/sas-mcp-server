@@ -251,7 +251,10 @@ async def test_run_one_snippet_success(sample_sas_code, mock_access_token, mock_
     """Test successful execution of a SAS code snippet."""
     with patch('sas_mcp_server.viya_utils.httpx.AsyncClient') as mock_client_class:
         mock_client = AsyncMock()
-        mock_client_class.return_value.__aenter__.return_value = mock_client
+        # Works with both the pooled path (client used directly) and the
+        # legacy per-call path (client used as an async context manager).
+        mock_client.__aenter__.return_value = mock_client
+        mock_client_class.return_value = mock_client
         
         # Mock all the API calls
         mock_context_response = AsyncMock()
@@ -298,7 +301,10 @@ async def test_run_one_snippet_with_bearer_prefix(sample_sas_code, mock_env_vars
     
     with patch('sas_mcp_server.viya_utils.httpx.AsyncClient') as mock_client_class:
         mock_client = AsyncMock()
-        mock_client_class.return_value.__aenter__.return_value = mock_client
+        # Works with both the pooled path (client used directly) and the
+        # legacy per-call path (client used as an async context manager).
+        mock_client.__aenter__.return_value = mock_client
+        mock_client_class.return_value = mock_client
         
         # Mock minimal responses for the test
         mock_context_response = AsyncMock()

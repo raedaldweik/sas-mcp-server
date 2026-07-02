@@ -18,6 +18,16 @@ load_dotenv()
 from fastmcp import FastMCP, Client
 
 
+@pytest.fixture(autouse=True)
+def _fresh_pools():
+    """Reset the pooled HTTP clients / compute sessions / cached context ids
+    between tests so one test's mocks can never leak into the next."""
+    from sas_mcp_server.viya_utils import _reset_pools
+    _reset_pools()
+    yield
+    _reset_pools()
+
+
 @pytest.fixture
 def mock_env_vars(monkeypatch):
     """Set up mock environment variables for testing."""

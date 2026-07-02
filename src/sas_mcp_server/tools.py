@@ -79,15 +79,21 @@ def _num(value, default=None):
         raise ValueError(f"Expected a number, got {value!r}.")
 
 
-def _build_synthetic_sas(table, caslib, server, columns, n_rows, seed=12345):
+def _build_synthetic_sas(table, caslib, server, columns, n_rows, seed=12345,
+                         cas_session="mcpcas"):
     """Build a SAS program that synthesises *n_rows* rows from a column spec and
     loads the result into CAS as a promoted (global) table.
 
     Each column is a dict with ``name`` and ``type`` (id|int|float|category|
     bool|date) plus type-specific options. Raises ValueError on an invalid spec
     so the caller (agent) can correct it. All user-supplied strings are quoted/
-    validated, so the spec cannot inject arbitrary SAS.
+    validated, so the spec cannot inject arbitrary SAS. ``cas_session`` names
+    the CAS session the program opens — pass a unique name when the compute
+    session may be reused (a failed earlier run can leave the default name
+    taken).
     """
+    if not _VALID_NAME.match(str(cas_session or "")):
+        raise ValueError(f"'{cas_session}' is not a valid CAS session name.")
     if not isinstance(columns, list) or not columns:
         raise ValueError("Provide a non-empty list of column specs.")
     for nm in (table, caslib):
@@ -186,9 +192,9 @@ def _build_synthetic_sas(table, caslib, server, columns, n_rows, seed=12345):
     lines.append(f"  do _i = 1 to {n};")
     lines += [f"    {s}" for s in body]
     lines += ["    output;", "  end;", f"  drop _i{' _p' if uses_p else ''};", "run;", ""]
-    lines += ["cas mcpcas;", "caslib _all_ assign;", "proc casutil;",
+    lines += [f"cas {cas_session};", "caslib _all_ assign;", "proc casutil;",
               f'  load data=work._mcp_synth outcaslib="{caslib}" casout="{table}" promote;',
-              "quit;", "cas mcpcas terminate;"]
+              "quit;", f"cas {cas_session} terminate;"]
     return "\n".join(lines)
 
 
@@ -214,6 +220,46 @@ class ScopeError(Exception):
     """Raised when a tool is asked to act on a resource outside the use-case scope."""
 
 
+# ---------------------------------------------------------------------------
+# Tool groups — deploy one image as many "specialist" tool servers
+# ---------------------------------------------------------------------------
+# TOOL_GROUPS (comma/newline separated) limits which tool families this server
+# instance exposes. Leaving it unset registers everything (full co-pilot).
+# A smaller tool surface makes an agent faster and more reliable: the LLM
+# reads fewer schemas per turn and has fewer ways to pick the wrong tool.
+#
+# Groups:
+#   sas       execute_sas_code
+#   charts    render_chart
+#   data      list_cas_servers, list_caslibs, list_castables,
+#             get_castable_info, get_castable_columns, get_castable_data
+#   datamgmt  upload_data, promote_table_to_memory
+#   files     list_files, upload_file, download_file
+#   synth     generate_synthetic_data
+#   jobs      submit_batch_job, get_job_status, list_jobs, cancel_job,
+#             get_job_log
+#   ml        list_ml_projects, create_ml_project, run_ml_project,
+#             delete_ml_project, list_registered_models
+#   score     list_models_and_decisions, score_data
+#   insights  explain_data
+#
+# get_use_case is always registered so a scoped assistant can describe itself.
+TOOL_GROUP_NAMES = ("sas", "charts", "data", "datamgmt", "files", "synth",
+                    "jobs", "ml", "score", "insights")
+
+
+def _load_tool_groups() -> set:
+    raw = os.getenv("TOOL_GROUPS", "")
+    groups = {chunk.strip().lower()
+              for chunk in raw.replace("\n", ",").split(",") if chunk.strip()}
+    unknown = groups - set(TOOL_GROUP_NAMES)
+    if unknown:
+        logger.warning(
+            "TOOL_GROUPS contains unknown group(s) %s — valid groups: %s",
+            ", ".join(sorted(unknown)), ", ".join(TOOL_GROUP_NAMES))
+    return groups & set(TOOL_GROUP_NAMES)
+
+
 def register_tools(mcp, get_token):
     """Register all tools on *mcp*.
 
@@ -226,6 +272,20 @@ def register_tools(mcp, get_token):
         token.  HTTP mode pulls it from context state; stdio mode acquires it
         via password grant.
     """
+
+    # Optional tool-group scoping (TOOL_GROUPS env var). When set, only tools
+    # in the listed groups are registered — the mechanism behind the "each
+    # agent gets a scoped slice of MCP tools" orchestration pattern.
+    enabled_groups = _load_tool_groups()
+    if enabled_groups:
+        logger.info("TOOL_GROUPS active — exposing only: %s",
+                    ", ".join(sorted(enabled_groups)))
+
+    def tool(group):
+        """Like ``@mcp.tool()``, but only registers when *group* is enabled."""
+        if enabled_groups and group not in enabled_groups:
+            return lambda fn: fn
+        return mcp.tool()
 
     # Use-case scope (allowlist) read from environment variables. When no
     # ALLOWED_* variables are set, ``scope.active`` is False and every tool
@@ -267,7 +327,7 @@ def register_tools(mcp, get_token):
     # Original tool
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("sas")
     async def execute_sas_code(sas_code: str, ctx: Context) -> ToolResult:
         """
         Executes the provided SAS code in the Viya environment and returns information about the completed Job.
@@ -302,7 +362,7 @@ def register_tools(mcp, get_token):
 
     _CHART_TYPES = ("bar", "line", "area", "pie", "scatter")
 
-    @mcp.tool()
+    @tool("charts")
     async def render_chart(chart_type: str, title: str, data: list,
                            x_key: str, y_keys: list, ctx: Context,
                            subtitle: str = "", stacked: bool = False) -> dict:
@@ -356,7 +416,7 @@ def register_tools(mcp, get_token):
     # Tier 1 — Data Discovery (CAS Management)
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("data")
     async def list_cas_servers(ctx: Context) -> list:
         """List available CAS servers on the Viya environment."""
         logger.info("--- TOOL USED: list_cas_servers ---")
@@ -366,7 +426,7 @@ def register_tools(mcp, get_token):
             return [{"name": s.get("name"), "id": s.get("id"),
                      "description": s.get("description", "")} for s in items]
 
-    @mcp.tool()
+    @tool("data")
     async def list_caslibs(server_id: str, ctx: Context,
                            limit: int = 50) -> list:
         """List CAS libraries (caslibs) available on a CAS server.
@@ -383,7 +443,7 @@ def register_tools(mcp, get_token):
             return [{"name": c.get("name"), "type": c.get("type", ""),
                      "description": c.get("description", "")} for c in items]
 
-    @mcp.tool()
+    @tool("data")
     async def list_castables(server_id: str, caslib_name: str, ctx: Context,
                              limit: int = 50) -> list:
         """List tables in a CAS library.
@@ -406,7 +466,7 @@ def register_tools(mcp, get_token):
                      "rowCount": t.get("rowCount"),
                      "columnCount": t.get("columnCount")} for t in items]
 
-    @mcp.tool()
+    @tool("data")
     async def get_castable_info(server_id: str, caslib_name: str,
                                 table_name: str, ctx: Context) -> dict:
         """Get metadata for a CAS table (row count, column count, size, etc.).
@@ -425,7 +485,7 @@ def register_tools(mcp, get_token):
                 f"/casManagement/servers/{server_id}/caslibs/{caslib_name}/tables/{table_name}",
                 client)
 
-    @mcp.tool()
+    @tool("data")
     async def get_castable_columns(server_id: str, caslib_name: str,
                                    table_name: str, ctx: Context,
                                    limit: int = 200) -> list:
@@ -450,7 +510,7 @@ def register_tools(mcp, get_token):
                      "label": c.get("label", ""),
                      "format": c.get("format", "")} for c in items]
 
-    @mcp.tool()
+    @tool("data")
     async def get_castable_data(server_id: str, caslib_name: str,
                                 table_name: str, ctx: Context,
                                 limit: int = 100, start: int = 0) -> dict:
@@ -516,7 +576,7 @@ def register_tools(mcp, get_token):
     # Tier 2 — Data Operations & Files
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("datamgmt")
     async def upload_data(server_id: str, caslib_name: str, table_name: str,
                           csv_data: str, ctx: Context) -> dict:
         """Upload CSV data into a CAS table.
@@ -558,7 +618,7 @@ def register_tools(mcp, get_token):
                 "scope": body.get("scope"),
             }
 
-    @mcp.tool()
+    @tool("datamgmt")
     async def promote_table_to_memory(server_id: str, caslib_name: str,
                                       table_name: str, ctx: Context) -> dict:
         """Promote a CAS table to global scope (makes it visible to all sessions).
@@ -580,7 +640,7 @@ def register_tools(mcp, get_token):
                     return {"status": "already_promoted", "table": f"{caslib_name}.{table_name}"}
                 raise
 
-    @mcp.tool()
+    @tool("files")
     async def list_files(ctx: Context, limit: int = 50,
                          filter_name: Optional[str] = None) -> list:
         """List files in the Viya Files Service.
@@ -599,7 +659,7 @@ def register_tools(mcp, get_token):
                      "contentType": f.get("contentType", ""),
                      "size": f.get("size")} for f in items]
 
-    @mcp.tool()
+    @tool("files")
     async def upload_file(file_name: str, content: str, ctx: Context,
                           content_type: str = "text/plain") -> dict:
         """Upload a file to the Viya Files Service.
@@ -622,7 +682,7 @@ def register_tools(mcp, get_token):
             resp.raise_for_status()
             return resp.json()
 
-    @mcp.tool()
+    @tool("files")
     async def download_file(file_id: str, ctx: Context) -> str:
         """Download file content from the Viya Files Service.
 
@@ -641,7 +701,7 @@ def register_tools(mcp, get_token):
     # Data Generation
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("synth")
     async def generate_synthetic_data(table_name: str, columns: list,
                                       ctx: Context, n_rows: int = 1000,
                                       caslib_name: str = "Public",
@@ -685,8 +745,12 @@ def register_tools(mcp, get_token):
         async with _make_client(token) as client:
             target = await _resolve_free_table_name(
                 client, server_id, caslib_name, table_name)
+        # Unique CAS session name: the compute session may be pooled/reused,
+        # and a failed earlier run can leave the previous CAS session alive.
+        cas_session = f"mcp{uuid.uuid4().hex[:6]}"
         # _build_synthetic_sas validates the spec and raises ValueError on error.
-        code = _build_synthetic_sas(target, caslib_name, server_id, columns, n, seed)
+        code = _build_synthetic_sas(target, caslib_name, server_id, columns, n,
+                                    seed, cas_session=cas_session)
         output = await run_one_snippet(code, "1", token)
         state = output[1] if len(output) > 1 else "unknown"
         log_text = output[2] if len(output) > 2 else ""
@@ -701,7 +765,8 @@ def register_tools(mcp, get_token):
             if now_taken:
                 target = f"{table_name}_{uuid.uuid4().hex[:6]}"
                 code = _build_synthetic_sas(
-                    target, caslib_name, server_id, columns, n, seed)
+                    target, caslib_name, server_id, columns, n, seed,
+                    cas_session=f"mcp{uuid.uuid4().hex[:6]}")
                 output = await run_one_snippet(code, "1", token)
                 state = output[1] if len(output) > 1 else "unknown"
                 log_text = output[2] if len(output) > 2 else ""
@@ -730,7 +795,7 @@ def register_tools(mcp, get_token):
     # Tier 4 — Batch Jobs & Async Execution
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("jobs")
     async def submit_batch_job(sas_code: str, ctx: Context,
                                job_name: Optional[str] = None) -> dict:
         """Submit a SAS job for asynchronous execution via the Job Execution service.
@@ -755,7 +820,7 @@ def register_tools(mcp, get_token):
         async with _make_client(token) as client:
             return await _post_json("/jobExecution/jobs", client, body=body)
 
-    @mcp.tool()
+    @tool("jobs")
     async def get_job_status(job_id: str, ctx: Context) -> dict:
         """Check the status of a submitted job.
 
@@ -767,7 +832,7 @@ def register_tools(mcp, get_token):
         async with _make_client(token) as client:
             return await _get_json(f"/jobExecution/jobs/{job_id}", client)
 
-    @mcp.tool()
+    @tool("jobs")
     async def list_jobs(ctx: Context, limit: int = 20) -> list:
         """List recent jobs from the Job Execution service.
 
@@ -783,7 +848,7 @@ def register_tools(mcp, get_token):
                      "state": j.get("state", ""),
                      "creationTimeStamp": j.get("creationTimeStamp", "")} for j in items]
 
-    @mcp.tool()
+    @tool("jobs")
     async def cancel_job(job_id: str, ctx: Context) -> str:
         """Cancel a running job.
 
@@ -796,7 +861,7 @@ def register_tools(mcp, get_token):
             await _delete_resource(f"/jobExecution/jobs/{job_id}", client)
             return f"Job {job_id} cancelled."
 
-    @mcp.tool()
+    @tool("jobs")
     async def get_job_log(job_id: str, ctx: Context) -> str:
         """Retrieve the log of a completed job.
 
@@ -836,7 +901,7 @@ def register_tools(mcp, get_token):
     # Tier 5 — Model Management & Scoring
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("ml")
     async def list_ml_projects(ctx: Context, limit: int = 50) -> list:
         """List AutoML pipeline automation projects.
 
@@ -852,7 +917,7 @@ def register_tools(mcp, get_token):
                      "state": p.get("state", ""),
                      "description": p.get("description", "")} for p in items]
 
-    @mcp.tool()
+    @tool("ml")
     async def create_ml_project(project_name: str, data_table_uri: str,
                                 target_variable: str, ctx: Context,
                                 description: str = "",
@@ -924,7 +989,7 @@ def register_tools(mcp, get_token):
                 return await _post_json("/mlPipelineAutomation/projects", client,
                                         body=body, accept=mlpa_type)
 
-    @mcp.tool()
+    @tool("ml")
     async def run_ml_project(project_id: str, ctx: Context) -> dict:
         """Run an AutoML pipeline automation project.
 
@@ -960,7 +1025,7 @@ def register_tools(mcp, get_token):
                 return {"status": "running", "projectId": project_id}
             return resp.json()
 
-    @mcp.tool()
+    @tool("ml")
     async def delete_ml_project(project_id: str, ctx: Context) -> dict:
         """Delete an AutoML pipeline automation project.
 
@@ -978,7 +1043,7 @@ def register_tools(mcp, get_token):
                 f"/mlPipelineAutomation/projects/{project_id}", client)
         return {"status": "deleted", "projectId": project_id}
 
-    @mcp.tool()
+    @tool("ml")
     async def list_registered_models(ctx: Context, limit: int = 50) -> list:
         """List models in the Model Repository.
 
@@ -997,7 +1062,7 @@ def register_tools(mcp, get_token):
                      "description": m.get("description", ""),
                      "modelVersionName": m.get("modelVersionName", "")} for m in items]
 
-    @mcp.tool()
+    @tool("score")
     async def list_models_and_decisions(ctx: Context, limit: int = 50) -> list:
         """List published scoring models and decisions (MAS modules).
 
@@ -1015,7 +1080,7 @@ def register_tools(mcp, get_token):
             return [{"id": m.get("id"), "name": m.get("name", ""),
                      "description": m.get("description", "")} for m in items]
 
-    @mcp.tool()
+    @tool("score")
     async def score_data(module_id: str, step_id: str, input_data: dict,
                          ctx: Context) -> dict:
         """Score data against a published model or decision (MAS module).
@@ -1039,7 +1104,7 @@ def register_tools(mcp, get_token):
     # Tier 6 — Data Insights
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @tool("insights")
     async def explain_data(server_id: str, caslib_name: str, table_name: str,
                            target_variable: str, ctx: Context,
                            date_variable: Optional[str] = None) -> dict:

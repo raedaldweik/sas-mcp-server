@@ -175,6 +175,63 @@ Entries are comma- or newline-separated and matched case-insensitively against b
 
 With none of the `ALLOWED_*` variables set, the server behaves exactly as before (full access). This makes it easy to stand up many per-use-case assistants from one image — for example, in **SAS Retrieval Agent Manager**, register the container once as a **Container MCP Server** code template, then create one tool server per use case and set these variables on its Environment Variables tab.
 
+## Tool Groups — one image, many specialist agents
+
+`TOOL_GROUPS` (comma-separated) limits which tool *families* a server instance
+exposes. This is the mechanism behind an orchestrated multi-agent setup: deploy
+the **same container image several times**, each instance scoped to the slice
+of tools its agent needs. A smaller tool surface makes each agent noticeably
+faster and more reliable — the LLM reads fewer tool schemas per turn and has
+fewer ways to pick the wrong tool.
+
+| Group | Tools |
+|---|---|
+| `sas` | `execute_sas_code` |
+| `charts` | `render_chart` |
+| `data` | `list_cas_servers`, `list_caslibs`, `list_castables`, `get_castable_info`, `get_castable_columns`, `get_castable_data` |
+| `datamgmt` | `upload_data`, `promote_table_to_memory` |
+| `files` | `list_files`, `upload_file`, `download_file` |
+| `synth` | `generate_synthetic_data` |
+| `jobs` | `submit_batch_job`, `get_job_status`, `list_jobs`, `cancel_job`, `get_job_log` |
+| `ml` | `list_ml_projects`, `create_ml_project`, `run_ml_project`, `delete_ml_project`, `list_registered_models` |
+| `score` | `list_models_and_decisions`, `score_data` |
+| `insights` | `explain_data` |
+
+`get_use_case` is always registered. Unset = all groups (full co-pilot).
+
+Recommended slices for the five-specialist orchestration pattern (each becomes
+one RAM tool server + one RAM agent, coordinated by a RAM orchestrator agent):
+
+| Agent | `TOOL_GROUPS` |
+|---|---|
+| Data Steward (find, profile, quality-check) | `data, insights, charts` |
+| Data Engineering (clean, join, shape, generate) | `data, datamgmt, sas, synth, files, jobs` |
+| Model Builder (AutoML, register, score) | `data, ml, score, jobs` |
+| Insights & Reporting (visuals, summaries) | `data, charts, insights, sas` |
+| Platform Guide ("how do I…", pure RAG) | *(no tool server — collection only)* |
+
+## Performance
+
+The dominant cost of a SAS tool call used to be **compute session start-up**
+(a compute server pod spins up per call — routinely 15–45 seconds). The server
+now pools and reuses sessions, connections, and lookups. All of this is on by
+default:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COMPUTE_SESSION_REUSE` | `true` | Keep compute sessions warm between `execute_sas_code`/`generate_synthetic_data` calls instead of creating + deleting one per call. A dead pooled session is detected and the job retried once on a fresh one. |
+| `COMPUTE_SESSION_POOL_MAX` | `3` | Idle sessions kept per identity. |
+| `HTTP_CLIENT_POOL` | `true` | Reuse TCP+TLS connections to Viya across tool calls (per token). |
+| `JOB_POLL_INITIAL` | `0.25` | First job-state poll delay (seconds); backs off toward 2s, so short PROCs return in well under a second. |
+| `JOB_POLL_TIMEOUT` | `3600` | Longest a single job is polled before giving up. |
+| `MAX_SAS_OUTPUT_CHARS` | `12000` | Caps log/listing text returned to the agent (smaller payloads = faster LLM turns). |
+
+> Note: with session reuse on, consecutive SAS calls may share a compute
+> session — like a real SAS session, `WORK` datasets and macro variables
+> persist between calls. Sessions are pooled **per identity** (per token), so
+> users never share sessions. Set `COMPUTE_SESSION_REUSE=false` to restore the
+> old one-session-per-call behaviour.
+
 ## MCP Client Configuration
 
 Example configurations are provided in the `examples/` folder. Below are quick-start snippets for common clients.
