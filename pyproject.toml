@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 app = "sas_mcp_server.main:main"
 app-stdio = "sas_mcp_server.stdio_server:main"
+app-http-direct = "sas_mcp_server.http_direct_server:main"
 sas-mcp-login = "sas_mcp_server.auth_login:main"
 
 [build-system]

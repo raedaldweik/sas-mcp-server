@@ -38,9 +38,16 @@ RUN python3 -m venv .venv \
     && /app/.venv/bin/pip install --no-cache-dir --no-deps /install/*.whl \
     && rm -r /install
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER sas
 
 EXPOSE ${HOST_PORT}
-CMD ["app"]
+# The entrypoint picks the server from MCP_MODE (http-direct|http|stdio),
+# defaulting to http-direct so the image is ready to be hosted by a client that
+# cannot run a browser OAuth flow (e.g. SAS Retrieval Agent Manager). Passing an
+# explicit command — `docker run <image> app` — overrides the mode.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

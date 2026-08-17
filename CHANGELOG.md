@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+- **Direct HTTP mode (`app-http-direct`) — the server authenticates to Viya on its own behalf**, so MCP hosts that cannot run a browser OAuth flow can use it. SAS Retrieval Agent Manager (RAM) is the driving case: it starts the container and points an agent at `/mcp`, with no user to log in and no way to complete a PKCE round trip, so the existing HTTP server — which requires each *client* to authenticate and forwards that user's token upstream — is unusable there. The new server registers the same tiers, prompts, telemetry and compute-session lifespan, and differs only in where the Viya token comes from.
+  - **Refresh-token grant, preferred over username/password.** It is the only grant that works when Viya identities are federated through an external IdP (Okta, Entra) — SAS Logon never sees those users' passwords, so `password` cannot authenticate them at all — and it stores no password. `sas-mcp-login --print-refresh-token` mints one and prints it for `VIYA_REFRESH_TOKEN`; `VIYA_USERNAME`/`VIYA_PASSWORD` remain as a fallback for identities SAS Logon authenticates directly.
+  - **`ServiceTokenProvider` (`service_auth.py`) keeps it running unattended.** Access tokens are cached until a minute before expiry; concurrent tool calls arriving at expiry collapse into one upstream request under a lock, so a rotating refresh token is never consumed twice; a refresh token rotated by SAS Logon is carried forward, and if a rotated token is later rejected the provider retries once with the configured one rather than leaving the deployment dead until someone re-mints by hand. Failures surface as `AuthenticationError` quoting SAS Logon's own `error_description` and naming the command that fixes an expired token.
+  - **Optional API key on the endpoint** (`MCP_API_KEY`, sent as `X-API-Key` or `Authorization: Bearer`, constant-time compared, `/health` exempt for probes). Every request in this mode acts as one configured identity, so an unprotected endpoint grants whoever can route to it that identity's Viya access — the server warns at startup when the key is unset.
+  - **`MCP_TRANSPORT`** selects streamable HTTP (`/mcp`, default) or SSE (`/sse`) to match the host's expectation.
+  - [`deploy/RAM.md`](deploy/RAM.md) walks the whole path: minting the token, publishing and making the GHCR package public, every field of RAM's *Create new container tool template* dialog, and the failure modes with their causes.
+- **`sas-mcp-login --print-refresh-token`** prints the refresh token alongside the on-disk cache it already writes. Containers have no home directory to mount the cache into, so headless deployments need the token as an environment variable; without this the only way to get it was to read the JSON by hand.
+- **`CLIENT_SECRET`** for confidential OAuth client registrations. Public/PKCE clients (the documented registration) must send `client_id` in the body with *no* Basic header — SAS Logon rejects an empty-secret Basic header with `invalid_client` — so the secret is sent as HTTP Basic auth only when one is configured, in both the headless and browser flows.
+
+### Changed
+- **The container image selects its server from `MCP_MODE`** (`http-direct` | `http` | `stdio`) through a new entrypoint, replacing `CMD ["app"]`. **The default is `http-direct`**, so an image pulled into an agent platform works without extra arguments; `MCP_MODE=http` restores the previous browser-OAuth server, and an explicit command (`docker run <image> app`) still overrides the mode entirely — which is what the MCP Registry listing's `app-stdio` invocation relies on.
+- **CI and the GHCR publish workflow also run on `claude/**` branches**, single-arch for the branch builds. An agent platform can only consume a *published* image, so wiring up a deployment needs a pullable tag before the work merges; arm64 is emulated under QEMU and roughly triples the build, which releases justify and an iterating branch does not.
+
 ## [1.9.2] - 2026-08-12
 
 ### Fixed

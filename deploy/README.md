@@ -7,6 +7,7 @@ configuring Viya auth and connecting MCP clients, see
 | Target | Start here |
 |---|---|
 | **Container** (Docker / Podman) | [`docker.md`](docker.md) — build or pull the image, run it |
+| **SAS Retrieval Agent Manager** (RAM) | [`RAM.md`](RAM.md) — direct (service-account) mode, publishing the image, the container tool template field by field |
 | **Kubernetes** | this file, plus the artifacts below |
 
 ### Kubernetes artifacts

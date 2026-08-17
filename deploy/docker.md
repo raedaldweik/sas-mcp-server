@@ -32,6 +32,18 @@ You can also pass in the expected host port at build time:
 docker build --build-arg HOST_PORT=8500 -t MY_IMG_ARG:MY_TAG_ARG .
 ```
 
+### Choosing which server runs
+The image's entrypoint selects a server from `MCP_MODE`:
+
+| `MCP_MODE` | Server | Authentication |
+|---|---|---|
+| `http-direct` (default) | `app-http-direct` | The server authenticates to Viya itself with `VIYA_REFRESH_TOKEN` (or `VIYA_USERNAME`/`VIYA_PASSWORD`). For hosts that cannot run a browser flow — see [`RAM.md`](RAM.md). |
+| `http` | `app` | Per-user OAuth 2.0 PKCE; each MCP client signs in through a browser. |
+| `stdio` | `app-stdio` | Reads the token cache mounted at `/app/.sas`. |
+
+An explicit command overrides the mode entirely, so `docker run <image> app`
+starts the browser-OAuth server whatever `MCP_MODE` says.
+
 ### Running
 The docker container expects an .env file to be passed in at runtime.
 

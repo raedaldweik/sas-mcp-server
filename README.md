@@ -100,6 +100,38 @@ docker build -t sas-mcp-server .
 docker run -e VIYA_ENDPOINT=https://your-viya-server.com -p 8134:8134 sas-mcp-server
 ```
 
+The container picks its server from `MCP_MODE`, which defaults to `http-direct`
+(Option D) so the image works in hosts that cannot run a browser OAuth flow. Set
+`MCP_MODE=http` for the browser-OAuth server, `MCP_MODE=stdio` for stdio, or
+pass an explicit command (`docker run <image> app`), which overrides the mode.
+
+**Option D: Direct HTTP mode** (the server authenticates itself)
+
+For MCP hosts that cannot run an interactive OAuth flow — SAS Retrieval Agent
+Manager (RAM), scheduled agents, server-to-server integrations. The server holds
+one Viya identity and every tool call acts as it, so no client-side login is
+involved:
+
+```sh
+uv run sas-mcp-login --print-refresh-token   # once — copy the printed token
+VIYA_REFRESH_TOKEN=<token> uv run app-http-direct
+```
+
+The refresh token is the preferred credential, and the only one that works when
+Viya identities are federated through an external IdP (Okta, Entra) — SAS Logon
+never sees those users' passwords, so the password grant
+(`VIYA_USERNAME`/`VIYA_PASSWORD`) cannot authenticate them. Access tokens are
+cached until just before expiry and refreshed automatically, following SAS
+Logon's refresh-token rotation, so the server can run unattended.
+
+Since every request then acts as that one identity, protect the endpoint:
+set `MCP_API_KEY` and clients must send it as `X-API-Key` or
+`Authorization: Bearer` (`/health` stays open for probes). Leave it unset only
+where the network already restricts who can reach the server.
+
+Full walkthrough for RAM, including the container tool template field by field:
+[deploy/RAM.md](/deploy/RAM.md).
+
 Available image tags:
 - `latest` — most recent tagged release
 - `<major>.<minor>.<patch>` (e.g. `1.0.0`) — specific release
@@ -123,19 +155,21 @@ If your compute deployment does not expose `/compute/contexts` and only supports
 
 ### Choosing a deployment mode
 
-| | **HTTP** | **Stdio** | **Docker** | **Kubernetes** |
-|---|---|---|---|---|
-| **How it runs** | Long-running server you start separately | MCP client spawns it on demand | Containerized HTTP server | Containerized, behind an ingress |
-| **Authentication** | OAuth2 PKCE flow (browser popup) | Cached token via `sas-viya` CLI or `sas-mcp-login` | OAuth2 PKCE flow (browser popup) | PKCE and/or raw Viya bearer token |
-| **Best for** | Multi-user or shared setups; production-like environments | Single-user local development; quick experimentation | Team deployments; CI/CD; environments without Python installed | Shared/organisational deployments alongside Viya |
-| **Requires** | Python + uv | Python + uv (+ optional `sas-viya` CLI) | Docker or Podman only | A cluster, an ingress controller, a TLS secret |
-| **Credentials stored?** | No — user authenticates interactively | No — only an access token (not a password) is cached | No — user authenticates interactively | No — a signing key in a `Secret`; users authenticate themselves |
-| **MCP client config** | Point client to `http://localhost:8134/mcp` | Client runs `uv run app-stdio` | Point client to `http://host:8134/mcp` | Point client to `https://<viya-host>/mcp` |
+| | **HTTP** | **Stdio** | **Direct HTTP** | **Docker** | **Kubernetes** |
+|---|---|---|---|---|---|
+| **How it runs** | Long-running server you start separately | MCP client spawns it on demand | Long-running server, usually as a container the host starts | Containerized server | Containerized, behind an ingress |
+| **Authentication** | OAuth2 PKCE flow (browser popup) | Cached token via `sas-viya` CLI or `sas-mcp-login` | The server's own refresh token (or username/password) | Whichever mode `MCP_MODE` selects | PKCE and/or raw Viya bearer token |
+| **Acts as** | each end user | you | one configured identity, for every request | depends on the mode | each end user |
+| **Best for** | Multi-user or shared setups; production-like environments | Single-user local development; quick experimentation | Hosts that cannot run a browser flow — SAS Retrieval Agent Manager, scheduled agents | Team deployments; CI/CD; environments without Python installed | Shared/organisational deployments alongside Viya |
+| **Requires** | Python + uv | Python + uv (+ optional `sas-viya` CLI) | A refresh token, minted once | Docker or Podman only | A cluster, an ingress controller, a TLS secret |
+| **Credentials stored?** | No — user authenticates interactively | No — only an access token (not a password) is cached | Yes — a refresh token in the environment; treat it as a secret | Depends on the mode | No — a signing key in a `Secret`; users authenticate themselves |
+| **MCP client config** | Point client to `http://localhost:8134/mcp` | Client runs `uv run app-stdio` | Point host to `http://host:8134/mcp`, no client auth | Point client to `http://host:8134/mcp` | Point client to `https://<viya-host>/mcp` |
 
 **Quick guidance:**
 - **Starting out or exploring?** Use **stdio** — one `sas-viya auth loginCode` or `uv run sas-mcp-login`, then your MCP client manages the server lifecycle.
 - **Need secure, interactive auth?** Use **HTTP** — no stored passwords, each user authenticates via browser.
 - **Deploying for a team or on a server?** Use **Docker** — portable, no Python dependency on the host, easy to integrate with orchestrators.
+- **Hosting it behind an agent platform (e.g. SAS Retrieval Agent Manager)?** Use **direct HTTP** — the platform starts the container and cannot log a user in; see [deploy/RAM.md](/deploy/RAM.md).
 - **Running it for a whole organisation?** Use **Kubernetes** — a sample manifest and a Helm chart are in [deploy/](/deploy/README.md), including the ingress routing the OAuth flow needs.
 - **Using Gemini CLI?** Use **stdio** — Gemini CLI does not support HTTP mode or browser-based OAuth. See [Gemini CLI configuration](examples/configuration.md#gemini-cli).
 - **Installing from a client's server catalogue?** That path runs the published container in **stdio** mode (`app-stdio`), not as an HTTP server, so it authenticates from your `~/.sas` token cache — which has to be mounted into the container at `/app/.sas`.

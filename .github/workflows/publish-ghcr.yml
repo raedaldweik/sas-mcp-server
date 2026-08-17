@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+      # Feature branches that need a pullable image before they merge — e.g. a
+      # deployment being wired up in SAS Retrieval Agent Manager, which can only
+      # consume a published image, never a local build.
+      - 'claude/**'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -47,6 +51,9 @@ jobs:
             # branch name, so this published `main` and never the documented
             # `edge` that deploy/docker.md tells people to pull.
             type=raw,value=edge,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # Branch builds get a tag named after the branch (slashes become
+            # dashes), so a work-in-progress deployment has a stable ref to pull.
+            type=ref,event=branch,enable=${{ startsWith(github.ref, 'refs/heads/claude/') }}
             type=sha,format=short,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -58,7 +65,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # arm64 is emulated under QEMU and roughly triples the build; releases
+          # and `edge` are worth it, an iterating feature branch is not.
+          platforms: ${{ startsWith(github.ref, 'refs/heads/claude/') && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

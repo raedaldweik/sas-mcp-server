@@ -151,6 +151,33 @@ def _write_cache(tokens: dict) -> Path:
     return CACHE_PATH
 
 
+def _report_success(path: Path, tokens: dict, print_refresh_token: bool) -> None:
+    """Print where the token was cached, and optionally the refresh token itself."""
+    print(f"Token cached at: {path}")
+    print(
+        "Stdio mode (`uv run app-stdio` or the container's `app-stdio` "
+        "command) will read this file automatically. Re-run "
+        "`sas-mcp-login` when the token expires."
+    )
+    if not print_refresh_token:
+        return
+    refresh_token = tokens.get("refresh_token", "")
+    if not refresh_token:
+        print(
+            "\nSAS Logon returned no refresh token for this client. Ask an "
+            "administrator to register the OAuth client with the "
+            "'refresh_token' grant type, then re-run this helper.",
+            file=sys.stderr,
+        )
+        return
+    # Printed for the headless servers (direct HTTP mode / RAM), which take the
+    # refresh token through the VIYA_REFRESH_TOKEN environment variable rather
+    # than reading the on-disk cache — the container has no home directory to
+    # mount it into. Treat the value as a password.
+    print("\nVIYA_REFRESH_TOKEN (secret — paste into the deployment's environment):\n")
+    print(refresh_token)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="SAS Viya zero-prereq OAuth login helper for sas-mcp-server stdio mode.",
@@ -192,6 +219,14 @@ def main() -> int:
         help="Print the authorization URL without opening a browser",
     )
     parser.add_argument(
+        "--print-refresh-token",
+        action="store_true",
+        help=(
+            "Also print the refresh token, for pasting into VIYA_REFRESH_TOKEN "
+            "when deploying direct HTTP mode (e.g. SAS Retrieval Agent Manager)"
+        ),
+    )
+    parser.add_argument(
         "--insecure",
         action="store_true",
         help="Skip SSL certificate verification",
@@ -231,12 +266,7 @@ def main() -> int:
             return 1
         path = _write_cache(tokens)
         _clear_state()
-        print(f"Token cached at: {path}")
-        print(
-            "Stdio mode (`uv run app-stdio` or the container's `app-stdio` "
-            "command) will read this file automatically. Re-run "
-            "`sas-mcp-login` when the token expires."
-        )
+        _report_success(path, tokens, args.print_refresh_token)
         return 0
 
     # Phase 1: no --code. Generate PKCE, print URL, persist verifier, and either
@@ -314,12 +344,7 @@ def main() -> int:
     path = _write_cache(tokens)
     _clear_state()
     print()
-    print(f"Token cached at: {path}")
-    print(
-        "Stdio mode (`uv run app-stdio` or the container's `app-stdio` command) "
-        "will read this file automatically. Re-run `sas-mcp-login` when the "
-        "token expires."
-    )
+    _report_success(path, tokens, args.print_refresh_token)
     return 0
 
 

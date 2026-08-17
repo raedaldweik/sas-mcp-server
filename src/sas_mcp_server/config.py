@@ -82,6 +82,12 @@ if not SSL_VERIFY:
 
 VIYA_ENDPOINT = os.getenv("VIYA_ENDPOINT", "").rstrip("/")
 CLIENT_ID = os.getenv("CLIENT_ID", "sas-mcp")
+# Optional OAuth client secret. Empty means a public client (PKCE /
+# allowpublic), which is the documented registration — SAS Logon rejects an
+# empty-secret Basic auth header with ``invalid_client``, so the headless
+# servers send client_id in the body instead. Set this only for a client
+# registered as confidential.
+CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
 HOST_PORT = int(os.getenv("HOST_PORT", "8134"))
 MCP_SIGNING_KEY = os.getenv("MCP_SIGNING_KEY", "default")
 CONTEXT_NAME = os.getenv("COMPUTE_CONTEXT_NAME", "SAS Job Execution compute context")
@@ -109,6 +115,29 @@ MCP_BASE_URL = _mcp_base_url if _mcp_base_url and not _mcp_base_url.startswith("
 # streamed through the model context (default 25 MiB).
 MAX_EXPORT_INLINE_BYTES = int(os.getenv("MAX_EXPORT_INLINE_BYTES", str(25 * 1024 * 1024)))
 
+# --- Direct (service-account) HTTP mode -------------------------------------
+# Used only by sas_mcp_server.http_direct_server, which authenticates to Viya
+# itself instead of making every MCP client run a browser OAuth flow. This is
+# the mode for hosts that cannot do interactive OAuth — SAS Retrieval Agent
+# Manager (RAM) and other server-to-server integrations.
+#
+# Preferred credential: a refresh token, which is the ONLY option when Viya
+# identities are federated through an external IdP (Okta/Entra), since SAS
+# Logon never sees those users' passwords. Mint one with
+# ``uv run sas-mcp-login --print-refresh-token``.
+VIYA_REFRESH_TOKEN = os.getenv("VIYA_REFRESH_TOKEN", "").strip()
+# Fallback for identities SAS Logon authenticates directly (sasboot, LDAP).
+# Used only when VIYA_REFRESH_TOKEN is empty.
+VIYA_USERNAME = os.getenv("VIYA_USERNAME", "")
+VIYA_PASSWORD = os.getenv("VIYA_PASSWORD", "")
+# Optional static API key protecting the direct-mode MCP endpoint. Clients send
+# it as ``X-API-Key`` or ``Authorization: Bearer``. Empty leaves the endpoint
+# open — acceptable only when the network already restricts who can reach it.
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")
+# Direct-mode transport: "http" (streamable HTTP, endpoint /mcp) or "sse"
+# (Server-Sent Events, endpoint /sse). Must match what the MCP client expects.
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "http").strip().lower()
+
 if not VIYA_ENDPOINT:
     raise ConfigError(
         "VIYA_ENDPOINT is not set. Please set it in the environment variables."
@@ -125,7 +154,9 @@ viya_auth = PermissiveOAuthProxy(
     upstream_authorization_endpoint=AUTHORIZATION_ENDPOINT,
     upstream_token_endpoint=TOKEN_ENDPOINT,
     upstream_client_id=CLIENT_ID,
-    upstream_client_secret=None,
+    # None for the default public/PKCE client; a secret only when one is
+    # configured, so a confidential registration works in browser mode too.
+    upstream_client_secret=CLIENT_SECRET or None,
     jwt_signing_key=MCP_SIGNING_KEY,
     base_url=MCP_BASE_URL,
     forward_pkce=True,
