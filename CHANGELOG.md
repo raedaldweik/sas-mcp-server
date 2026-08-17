@@ -14,7 +14,7 @@
 
 ### Changed
 - **The container image selects its server from `MCP_MODE`** (`http-direct` | `http` | `stdio`) through a new entrypoint, replacing `CMD ["app"]`. **The default is `http-direct`**, so an image pulled into an agent platform works without extra arguments; `MCP_MODE=http` restores the previous browser-OAuth server, and an explicit command (`docker run <image> app`) still overrides the mode entirely — which is what the MCP Registry listing's `app-stdio` invocation relies on.
-- **CI and the GHCR publish workflow also run on `claude/**` branches**, single-arch for the branch builds. An agent platform can only consume a *published* image, so wiring up a deployment needs a pullable tag before the work merges; arm64 is emulated under QEMU and roughly triples the build, which releases justify and an iterating branch does not.
+- **CI and the GHCR publish workflow also run on the `ram` branch**, which publishes a `ram` tag, amd64-only. An agent platform can only consume a *published* image, never a local build, so the deployment needs its own pullable tag; keeping it off `main` leaves the fork's `main` a clean mirror of upstream, so syncing stays a fast-forward instead of a conflict-resolution session. arm64 is emulated under QEMU and roughly triples the build — worth it for releases and `edge`, not for a branch that rebuilds on every deployment tweak.
 
 ## [1.9.2] - 2026-08-12
 

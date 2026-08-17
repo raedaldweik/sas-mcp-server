@@ -7,7 +7,7 @@ on:
       - main
       # Same set the image workflow publishes from — a branch that produces a
       # pullable image should have been linted and tested first.
-      - 'claude/**'
+      - ram
 
 permissions:
   contents: read
