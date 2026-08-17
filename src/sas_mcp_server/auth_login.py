@@ -151,7 +151,9 @@ def _write_cache(tokens: dict) -> Path:
     return CACHE_PATH
 
 
-def _report_success(path: Path, tokens: dict, print_refresh_token: bool) -> None:
+def _report_success(
+    path: Path, tokens: dict, print_refresh_token: bool, client_id: str = ""
+) -> None:
     """Print where the token was cached, and optionally the refresh token itself."""
     print(f"Token cached at: {path}")
     print(
@@ -174,8 +176,17 @@ def _report_success(path: Path, tokens: dict, print_refresh_token: bool) -> None
     # refresh token through the VIYA_REFRESH_TOKEN environment variable rather
     # than reading the on-disk cache — the container has no home directory to
     # mount it into. Treat the value as a password.
-    print("\nVIYA_REFRESH_TOKEN (secret — paste into the deployment's environment):\n")
-    print(refresh_token)
+    #
+    # CLIENT_ID is printed with it, and deliberately: a refresh token is bound
+    # to the OAuth client that minted it. This helper defaults to `vscode`
+    # while the servers default to `sas-mcp`, so a deployment that takes only
+    # the token gets `invalid_grant` from SAS Logon on the first tool call —
+    # with nothing in the message pointing at the client as the cause.
+    print("\nPaste BOTH of these into the deployment's environment "
+          "(the token is a secret — mark it as one):\n")
+    if client_id:
+        print(f"CLIENT_ID={client_id}")
+    print(f"VIYA_REFRESH_TOKEN={refresh_token}")
 
 
 def main() -> int:
@@ -266,7 +277,8 @@ def main() -> int:
             return 1
         path = _write_cache(tokens)
         _clear_state()
-        _report_success(path, tokens, args.print_refresh_token)
+        _report_success(path, tokens, args.print_refresh_token,
+                        state.get("client_id", ""))
         return 0
 
     # Phase 1: no --code. Generate PKCE, print URL, persist verifier, and either
@@ -344,7 +356,7 @@ def main() -> int:
     path = _write_cache(tokens)
     _clear_state()
     print()
-    _report_success(path, tokens, args.print_refresh_token)
+    _report_success(path, tokens, args.print_refresh_token, args.client_id)
     return 0
 
 

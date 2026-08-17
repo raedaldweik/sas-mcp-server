@@ -244,3 +244,62 @@ def test_main_phase1_interactive_exchanges(tmp_path, monkeypatch):
     assert rc == 0
     assert mock_post.call_args[1]["data"]["code"] == "PASTED_CODE"
     assert cache_p.exists()
+
+
+# ---------------------------------------------------------------------------
+# --print-refresh-token (headless / RAM deployment)
+# ---------------------------------------------------------------------------
+
+
+def test_print_refresh_token_emits_token_and_its_client_id(tmp_path, monkeypatch, capsys):
+    """The client id must be printed WITH the token.
+
+    A refresh token is bound to the OAuth client that minted it, and the
+    helper's default (`vscode`) differs from the servers' (`sas-mcp`), so a
+    deployment given only the token fails with `invalid_grant` on its first
+    call — an error that says nothing about client ids.
+    """
+    state_p = tmp_path / "state.json"
+    cache_p = tmp_path / "creds.json"
+    monkeypatch.setattr(auth_login, "STATE_PATH", state_p)
+    monkeypatch.setattr(auth_login, "CACHE_PATH", cache_p)
+    monkeypatch.setattr(sys, "argv", [
+        "sas-mcp-login", "--endpoint", "https://v", "--no-browser",
+        "--print-refresh-token",
+    ])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: "CODE")
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value={
+        "access_token": "AT", "refresh_token": "RT", "expires_in": 60,
+    })
+    with patch("sas_mcp_server.auth_login.httpx.post", return_value=resp):
+        assert auth_login.main() == 0
+
+    out = capsys.readouterr().out
+    assert "VIYA_REFRESH_TOKEN=RT" in out
+    assert f"CLIENT_ID={auth_login.DEFAULT_HELPER_CLIENT_ID}" in out
+
+
+def test_print_refresh_token_reports_when_none_was_issued(tmp_path, monkeypatch, capsys):
+    """A client without the refresh_token grant must say so, not print nothing."""
+    state_p = tmp_path / "state.json"
+    cache_p = tmp_path / "creds.json"
+    monkeypatch.setattr(auth_login, "STATE_PATH", state_p)
+    monkeypatch.setattr(auth_login, "CACHE_PATH", cache_p)
+    monkeypatch.setattr(sys, "argv", [
+        "sas-mcp-login", "--endpoint", "https://v", "--no-browser",
+        "--print-refresh-token",
+    ])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: "CODE")
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value={"access_token": "AT", "expires_in": 60})
+    with patch("sas_mcp_server.auth_login.httpx.post", return_value=resp):
+        assert auth_login.main() == 0
+
+    captured = capsys.readouterr()
+    assert "VIYA_REFRESH_TOKEN=" not in captured.out
+    assert "no refresh token" in captured.err

@@ -38,8 +38,21 @@ uv run sas-mcp-login --print-refresh-token
 ```
 
 The helper opens SAS Logon, takes the authorization code you paste back, and
-prints the refresh token at the end. Copy it — that value goes into
-`VIYA_REFRESH_TOKEN`.
+prints two lines at the end — **copy both**:
+
+```
+CLIENT_ID=vscode
+VIYA_REFRESH_TOKEN=eyJhb...
+```
+
+`CLIENT_ID` is not optional decoration. **A refresh token is bound to the OAuth
+client that minted it**, and the two defaults differ on purpose: this helper
+uses `vscode` (built into Viya 2022.11+, so no admin registration is needed),
+while the servers default to `sas-mcp`. Deploy the token without its client and
+SAS Logon rejects the exchange with `invalid_grant` on the first tool call, in a
+message that says nothing about client ids. Either set `CLIENT_ID` to what the
+helper printed, or mint the token with the client you intend to run under
+(`sas-mcp-login --client-id sas-mcp ...`).
 
 If your OAuth client is not registered with the `refresh_token` grant type the
 helper says so; ask an administrator to add it, or fall back to
@@ -114,12 +127,12 @@ then send that key, so leave the variable unset unless you configure it here.)
 | Variable | Value | Why |
 |---|---|---|
 | `VIYA_ENDPOINT` | `https://your-viya-host.com` | Required. No trailing slash. |
-| `VIYA_REFRESH_TOKEN` | *(the token from step 1)* | The server's credential. Secret. |
+| `VIYA_REFRESH_TOKEN` | *(the token from step 1)* | The server's credential — tick RAM's **Secret** box, or it renders in plain text in the template's variable list. |
 | `HOST_PORT` | `8000` | Must equal the **Port** field. Defaults to `8134` if unset. |
 | `MCP_MODE` | `http-direct` | The image's default; set it explicitly so the intent is visible. |
 | `MCP_TRANSPORT` | `http` | Serves `/mcp`. Use `sse` only if the client needs `/sse`. |
 | `SSL_VERIFY` | `true` | Set `false` only for a self-signed Viya certificate. |
-| `CLIENT_ID` | `sas-mcp` | Only if your OAuth client is registered under another id. |
+| `CLIENT_ID` | *(whatever step 1 printed — `vscode` if you used the helper's default)* | **Must be the client that minted the refresh token**, or the exchange fails with `invalid_grant`. |
 | `MCP_SERVER_NAME` | e.g. `SAS Viya (prod)` | Name the agent sees — worth setting when you run more than one. |
 | `MCP_TIERS` | e.g. `0-4` | Optional. Expose only some tool tiers; unset means all. |
 | `MCP_READ_ONLY` | `false` | Optional. `true` withholds every tool that changes state or starts work. |
@@ -188,7 +201,7 @@ deploy from anyway.
 | RAM cannot pull the image | The GHCR package is still private (step 2), or the tag does not exist yet — check the workflow run finished. |
 | The publish workflow fails with `denied: permission_denied: write_package` | The package is not linked to this repository — grant Actions **Write** access to it (step 2). The build itself succeeded; only the push was refused. |
 | Connects, but every tool call fails with `AuthenticationError` | No credential in the environment, or the refresh token expired/was revoked. The message names the fix; re-run step 1. |
-| `SAS Logon rejected the refresh_token grant (HTTP 401)` | The OAuth client does not have the `refresh_token` grant type, or `CLIENT_ID` here differs from the client the token was minted with. |
+| `SAS Logon rejected the refresh_token grant` / `invalid_grant` | Nearly always `CLIENT_ID` not matching the client that minted the token (the helper defaults to `vscode`, the servers to `sas-mcp`). Otherwise the client lacks the `refresh_token` grant type, or the token was revoked. |
 | `invalid_client` / "Missing credentials" | A `CLIENT_SECRET` was set for a client registered as public. Leave it empty unless the client is confidential. |
 | Health check passes, agent sees no tools | Base Path or Transport mismatch: `http` serves `/mcp`, `sse` serves `/sse`. |
 | Certificate errors against Viya | Self-signed certificate — set `SSL_VERIFY=false`. |
